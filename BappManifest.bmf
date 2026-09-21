@@ -2,12 +2,12 @@ Uuid: 93dc0a922a9b4b3f994a8fc881509093
 ExtensionType: 1
 Name: Reverse Shell Receiver
 RepoName: reverse-shell-receiver
-ScreenVersion: 1.0.0
-SerialVersion: 1
+ScreenVersion: 1.0.1
+SerialVersion: 2
 MinPlatformVersion: 2
 ProOnly: True
 Author: joelindra
 ShortDescription: Adds an HTTP webhook listener, reverse shell terminal, and payload generator tab.
-EntryPoint: reverse-shell-receiver-1.0.0-jar-with-dependencies.jar
+EntryPoint: reverse-shell-receiver-1.0.1-jar-with-dependencies.jar
 BuildCommand: mvn clean package
 SupportedProducts: Pro
