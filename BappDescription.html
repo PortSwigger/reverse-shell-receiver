@@ -1,0 +1,23 @@
+<p>This extension provides penetration testers with an integrated tab combining an HTTP webhook listener for out-of-band testing (OAST), an interactive reverse shell terminal, and a multi-platform payload generator.</p>
+
+<h2>Features</h2>
+<ul>
+  <li>HTTP webhook listener that starts a TCP socket server on a configurable port, captures inbound HTTP requests, and displays them in a sortable, filterable history table with full request and response detail in native editor panels.</li>
+  <li>Reconstructs target service details from the <code class=InlineCode>Host</code> header so that captured requests support context menu actions such as sending to Repeater directly from the request/response editor.</li>
+  <li>Interactive reverse shell terminal that continuously listens for incoming connections, automatically re-enters the accept loop after a session ends, and probes the remote OS to display a live working directory prompt styled for Linux/UNIX, cmd.exe, or PowerShell.</li>
+  <li>Payload generator covering reverse and bind shells, web shells, and data exfiltration one-liners across Linux/macOS and Windows, with IP auto-detection from active network interfaces, and encoding options including None, Base64, and URL.</li>
+  <li>Listener status card showing an ONLINE/OFFLINE badge alongside clickable address chips that copy the listening address to the clipboard and transition visually on hover and copy.</li>
+  <li>Port management tool that scans for processes occupying a configured port using <code class=InlineCode>netstat</code> and provides per-process kill controls on both Windows and Linux.</li>
+  <li>Content-Length clamped to 10 MB on inbound requests to prevent heap exhaustion from oversized request bodies.</li>
+</ul>
+
+<h2>Usage</h2>
+<ol>
+  <li>Open the extension tab and enter the desired port number for the HTTP webhook listener or reverse shell listener.</li>
+  <li>Click the start button to bring the listener online; confirm the ONLINE badge appears in the status card.</li>
+  <li>To capture out-of-band HTTP requests, direct target callbacks to your listening address and port. Incoming requests appear as rows in the history table; click a row to inspect the full request and response side-by-side.</li>
+  <li>To use the reverse shell terminal, configure the target to connect back on the shell listener port. Once connected, the extension probes the remote OS and displays a prompt showing the current remote path. Type commands into the input field and press Enter to send.</li>
+  <li>To generate a payload, select the Payload Generator panel, choose a category (Reverse/Bind Shell, Web Shell, or Data Exfiltration), select the target OS and template, pick your local IP from the interface dropdown, choose an encoding, and click generate. Use the copy button to place the payload on the clipboard.</li>
+  <li>To send a captured request to another tool, right-click it in Proxy History or the message editor and select the appropriate context menu action (for example, Send to Repeater).</li>
+  <li>If a port is already in use, click the Kill Used Ports button to scan for occupying processes and terminate them individually from the results dialog.</li>
+</ol>
