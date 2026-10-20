@@ -86,13 +86,19 @@ public class ModernButton extends JButton {
     }
 
     @Override
+    public void updateUI() {
+        super.updateUI();
+        repaint();
+    }
+
+    @Override
     protected void paintComponent(Graphics g) {
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
         if (!isEnabled()) {
-            g2.setColor(disabledBg);
-            setForeground(new Color(148, 163, 184));
+            g2.setColor(UITheme.getDisabledButtonBg());
+            setForeground(UITheme.getDisabledButtonFg());
         } else if (getModel().isPressed()) {
             g2.setColor(pressedBg);
             setForeground(Color.WHITE);

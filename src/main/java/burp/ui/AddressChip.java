@@ -28,6 +28,16 @@ public class AddressChip extends JPanel {
     private static final Color FG_NORMAL = new Color(30, 41, 59);         // #1e293b
     private static final Color FG_COPIED = new Color(22, 101, 52);        // #166534
 
+    // Dark Mode Colors
+    private static final Color DARK_BG_NORMAL = new Color(33, 38, 45);
+    private static final Color DARK_BG_HOVER = new Color(48, 54, 61);
+    private static final Color DARK_BG_COPIED = new Color(22, 54, 34);
+    private static final Color DARK_BORDER_NORMAL = new Color(56, 64, 75);
+    private static final Color DARK_BORDER_HOVER = new Color(88, 100, 118);
+    private static final Color DARK_BORDER_COPIED = new Color(46, 160, 67);
+    private static final Color DARK_FG_NORMAL = new Color(230, 237, 243);
+    private static final Color DARK_FG_COPIED = new Color(63, 185, 80);
+
     public AddressChip(String text) {
         this(text, text);
     }
@@ -43,14 +53,16 @@ public class AddressChip extends JPanel {
 
         label = new JLabel(displayText);
         label.setFont(UITheme.FONT_CODE_BOLD);
-        label.setForeground(FG_NORMAL);
+        label.setForeground(getNormalFg());
         label.setCursor(new Cursor(Cursor.HAND_CURSOR));
         add(label);
 
         MouseAdapter adapter = new MouseAdapter() {
             @Override
-            public void mouseClicked(MouseEvent e) {
-                copyToClipboard(e);
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isLeftMouseButton(e)) {
+                    copyToClipboard(e);
+                }
             }
 
             @Override
@@ -70,13 +82,61 @@ public class AddressChip extends JPanel {
         label.addMouseListener(adapter);
     }
 
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        if (label != null && !isCopied) {
+            label.setForeground(getNormalFg());
+        }
+        repaint();
+    }
+
+    public void refreshTheme() {
+        if (label != null && !isCopied) {
+            label.setForeground(getNormalFg());
+        }
+        repaint();
+    }
+
+    private Color getNormalBg() {
+        return UITheme.isDarkMode() ? DARK_BG_NORMAL : BG_NORMAL;
+    }
+
+    private Color getHoverBg() {
+        return UITheme.isDarkMode() ? DARK_BG_HOVER : BG_HOVER;
+    }
+
+    private Color getCopiedBg() {
+        return UITheme.isDarkMode() ? DARK_BG_COPIED : BG_COPIED;
+    }
+
+    private Color getNormalBorder() {
+        return UITheme.isDarkMode() ? DARK_BORDER_NORMAL : BORDER_NORMAL;
+    }
+
+    private Color getHoverBorder() {
+        return UITheme.isDarkMode() ? DARK_BORDER_HOVER : BORDER_HOVER;
+    }
+
+    private Color getCopiedBorder() {
+        return UITheme.isDarkMode() ? DARK_BORDER_COPIED : BORDER_COPIED;
+    }
+
+    private Color getNormalFg() {
+        return UITheme.isDarkMode() ? DARK_FG_NORMAL : FG_NORMAL;
+    }
+
+    private Color getCopiedFg() {
+        return UITheme.isDarkMode() ? DARK_FG_COPIED : FG_COPIED;
+    }
+
     private void copyToClipboard(MouseEvent e) {
         StringSelection selection = new StringSelection(copyValue);
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(selection, null);
 
         isCopied = true;
         label.setText("COPIED: " + copyValue);
-        label.setForeground(FG_COPIED);
+        label.setForeground(getCopiedFg());
         repaint();
 
         // Toast feedback without icons
@@ -85,7 +145,7 @@ public class AddressChip extends JPanel {
         Timer timer = new Timer(1500, evt -> {
             isCopied = false;
             label.setText(displayText);
-            label.setForeground(FG_NORMAL);
+            label.setForeground(getNormalFg());
             repaint();
         });
         timer.setRepeats(false);
@@ -96,26 +156,29 @@ public class AddressChip extends JPanel {
         Window window = SwingUtilities.getWindowAncestor(this);
         if (window == null) return;
 
-        JWindow toast = new JWindow(window);
-        JPanel toastPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 6));
-        toastPanel.setBackground(UITheme.STATUS_SUCCESS);
-        toastPanel.setBorder(new EmptyBorder(4, 10, 4, 10));
+        try {
+            JWindow toast = new JWindow(window);
+            JPanel toastPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 6));
+            toastPanel.setBackground(UITheme.STATUS_SUCCESS);
+            toastPanel.setBorder(new EmptyBorder(4, 10, 4, 10));
 
-        JLabel msg = new JLabel("Copied to clipboard: " + copyValue);
-        msg.setFont(UITheme.FONT_BOLD);
-        msg.setForeground(Color.WHITE);
-        toastPanel.add(msg);
+            JLabel msg = new JLabel("Copied to clipboard: " + copyValue);
+            msg.setFont(UITheme.FONT_BOLD);
+            msg.setForeground(Color.WHITE);
+            toastPanel.add(msg);
 
-        toast.getContentPane().add(toastPanel);
-        toast.pack();
+            toast.getContentPane().add(toastPanel);
+            toast.pack();
 
-        Point pt = e.getLocationOnScreen();
-        toast.setLocation(pt.x + 8, pt.y - toast.getHeight() - 4);
-        toast.setVisible(true);
+            Point pt = e.getLocationOnScreen();
+            toast.setLocation(pt.x + 8, Math.max(0, pt.y - toast.getHeight() - 4));
+            toast.setFocusableWindowState(false);
+            toast.setVisible(true);
 
-        Timer t = new Timer(1400, evt -> toast.dispose());
-        t.setRepeats(false);
-        t.start();
+            Timer t = new Timer(1400, evt -> toast.dispose());
+            t.setRepeats(false);
+            t.start();
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -128,23 +191,26 @@ public class AddressChip extends JPanel {
         int arc = 12;
 
         if (isCopied) {
-            g2.setColor(BG_COPIED);
+            g2.setColor(getCopiedBg());
             g2.fillRoundRect(0, 0, w, h, arc, arc);
-            g2.setColor(BORDER_COPIED);
+            g2.setColor(getCopiedBorder());
             g2.setStroke(new BasicStroke(1.2f));
             g2.drawRoundRect(0, 0, w, h, arc, arc);
+            label.setForeground(getCopiedFg());
         } else if (isHovered) {
-            g2.setColor(BG_HOVER);
+            g2.setColor(getHoverBg());
             g2.fillRoundRect(0, 0, w, h, arc, arc);
-            g2.setColor(BORDER_HOVER);
+            g2.setColor(getHoverBorder());
             g2.setStroke(new BasicStroke(1.2f));
             g2.drawRoundRect(0, 0, w, h, arc, arc);
+            label.setForeground(getNormalFg());
         } else {
-            g2.setColor(BG_NORMAL);
+            g2.setColor(getNormalBg());
             g2.fillRoundRect(0, 0, w, h, arc, arc);
-            g2.setColor(BORDER_NORMAL);
+            g2.setColor(getNormalBorder());
             g2.setStroke(new BasicStroke(1.0f));
             g2.drawRoundRect(0, 0, w, h, arc, arc);
+            label.setForeground(getNormalFg());
         }
 
         g2.dispose();

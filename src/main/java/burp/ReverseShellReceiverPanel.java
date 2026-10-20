@@ -18,10 +18,10 @@ import burp.ui.ModernButton;
 import burp.ui.UITheme;
 
 import javax.swing.*;
-import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
-import javax.swing.border.TitledBorder;
+import javax.swing.event.AncestorEvent;
+import javax.swing.event.AncestorListener;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.DefaultTableModel;
@@ -30,6 +30,8 @@ import java.awt.*;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -92,6 +94,7 @@ public class ReverseShellReceiverPanel extends JPanel {
     private JPanel shellTerminalContainer;
     private DefaultTableModel sessionTableModel;
     private JTable sessionTable;
+    private boolean isUpdatingTable = false;
     private JTextField shellInputField;
     private ModernButton shellSendButton;
     private ModernButton shellCtrlCButton;
@@ -115,6 +118,47 @@ public class ReverseShellReceiverPanel extends JPanel {
     private JTextArea payloadDescriptionArea;
     private ITextEditor payloadEditor;
 
+    // --- Dynamic Theme Support Components ---
+    private JTabbedPane mainTabs;
+    private JPanel controlBar;
+    private JLabel modeLabel;
+    private JLabel portLabel;
+    private JPanel statusCard;
+    private JLabel statusSub;
+    private JPanel statusRight;
+    private JLabel addrHeader;
+    private JLabel waitingLabel;
+
+    private JPanel filterBar;
+    private JLabel filterLabel;
+    private JScrollPane tableScroll;
+    private JLabel reqTitle;
+    private JLabel respTitle;
+
+    private JPanel sessionManagerCard;
+    private JLabel sessionTitle;
+    private JScrollPane sessionScroll;
+    private JLabel waitingShellLabel;
+    private JPanel assistBar;
+    private JLabel quickLabel;
+    private JPanel inputBar;
+    private JLabel promptText;
+
+    private JPanel controlsCard;
+    private JLabel searchLabel;
+    private JLabel catLabel;
+    private JLabel osLabel;
+    private JLabel tplLabel;
+    private JLabel ipLabel;
+    private JLabel payloadPortLabel;
+    private JLabel shellLabel;
+    private JLabel fileLabel;
+    private JLabel encLabel;
+    private JPanel editorContainer;
+    private JPanel descWrapper;
+
+    private volatile boolean isInitialized = false;
+
     public ReverseShellReceiverPanel(IBurpExtenderCallbacks callbacks) {
         this.callbacks = callbacks;
         this.helpers = callbacks.getHelpers();
@@ -122,10 +166,44 @@ public class ReverseShellReceiverPanel extends JPanel {
 
         setLayout(new BorderLayout(8, 8));
         setBorder(new EmptyBorder(8, 8, 8, 8));
-        setBackground(UITheme.PRIMARY_BG);
+        setBackground(UITheme.getPrimaryBg());
 
         initSessionManagerListener();
         initUI();
+        isInitialized = true;
+        applyTheme();
+
+        // Listen for Burp Suite LookAndFeel theme switches
+        UITheme.addThemeChangeListener(() -> {
+            SwingUtilities.invokeLater(this::applyTheme);
+            javax.swing.Timer t = new javax.swing.Timer(100, e -> applyTheme());
+            t.setRepeats(false);
+            t.start();
+        });
+
+        try {
+            UIManager.addPropertyChangeListener(evt -> {
+                if ("lookAndFeel".equals(evt.getPropertyName())) {
+                    SwingUtilities.invokeLater(this::applyTheme);
+                    javax.swing.Timer t = new javax.swing.Timer(100, e -> applyTheme());
+                    t.setRepeats(false);
+                    t.start();
+                }
+            });
+        } catch (Exception ignored) {}
+
+        addAncestorListener(new AncestorListener() {
+            @Override
+            public void ancestorAdded(AncestorEvent event) {
+                SwingUtilities.invokeLater(ReverseShellReceiverPanel.this::applyTheme);
+            }
+
+            @Override
+            public void ancestorRemoved(AncestorEvent event) {}
+
+            @Override
+            public void ancestorMoved(AncestorEvent event) {}
+        });
     }
 
     private void initSessionManagerListener() {
@@ -204,9 +282,193 @@ public class ReverseShellReceiverPanel extends JPanel {
         });
     }
 
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        if (isInitialized) {
+            applyTheme();
+        }
+    }
+
+    public void applyTheme() {
+        setBackground(UITheme.getPrimaryBg());
+
+        // Top Control Bar & Status Card
+        if (controlBar != null) {
+            controlBar.setBackground(UITheme.getCardBg());
+            controlBar.setBorder(UITheme.createCardBorder());
+        }
+        if (modeLabel != null) modeLabel.setForeground(UITheme.getTextSecondary());
+        if (portLabel != null) portLabel.setForeground(UITheme.getTextSecondary());
+        if (tlsCheckBox != null) {
+            tlsCheckBox.setForeground(UITheme.getTextSecondary());
+            callbacks.customizeUiComponent(tlsCheckBox);
+        }
+        if (portField != null) {
+            UITheme.styleTextField(portField);
+            callbacks.customizeUiComponent(portField);
+        }
+        if (modeCombo != null) {
+            UITheme.styleComboBox(modeCombo);
+            callbacks.customizeUiComponent(modeCombo);
+        }
+
+        if (statusCard != null) {
+            statusCard.setBackground(UITheme.getCardBg());
+            statusCard.setBorder(UITheme.createCardBorder());
+        }
+        if (statusSub != null) statusSub.setForeground(UITheme.getTextMuted());
+        if (statusRight != null) {
+            statusRight.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createMatteBorder(0, 1, 0, 0, UITheme.getBorderColor()),
+                    new EmptyBorder(0, 14, 0, 0)));
+        }
+        if (addrHeader != null) addrHeader.setForeground(UITheme.getTextSecondary());
+        if (waitingLabel != null) waitingLabel.setForeground(UITheme.getTextMuted());
+        if (vpnWarningLabel != null) vpnWarningLabel.setForeground(UITheme.getTextMuted());
+        if (ipListPanel != null) {
+            for (Component c : ipListPanel.getComponents()) {
+                if (c instanceof AddressChip) {
+                    ((AddressChip) c).refreshTheme();
+                }
+            }
+        }
+
+        // Webhook Panel
+        if (filterBar != null) filterBar.setBackground(UITheme.getCardBg());
+        if (filterLabel != null) filterLabel.setForeground(UITheme.getTextSecondary());
+        if (webhookFilterField != null) {
+            UITheme.styleTextField(webhookFilterField);
+            callbacks.customizeUiComponent(webhookFilterField);
+        }
+        if (webhookTable != null) {
+            UITheme.styleTable(webhookTable);
+            callbacks.customizeUiComponent(webhookTable);
+            callbacks.customizeUiComponent(webhookTable.getTableHeader());
+        }
+        if (tableScroll != null) {
+            tableScroll.setBorder(new LineBorder(UITheme.getBorderColor(), 1));
+            tableScroll.getViewport().setBackground(UITheme.getCardBg());
+            callbacks.customizeUiComponent(tableScroll);
+        }
+        if (reqTitle != null) {
+            reqTitle.setBackground(UITheme.getCardHeaderBg());
+            reqTitle.setForeground(UITheme.getTextSecondary());
+        }
+        if (respTitle != null) {
+            respTitle.setBackground(UITheme.getCardHeaderBg());
+            respTitle.setForeground(UITheme.getTextSecondary());
+        }
+        if (requestViewer != null) callbacks.customizeUiComponent(requestViewer.getComponent());
+        if (responseViewer != null) callbacks.customizeUiComponent(responseViewer.getComponent());
+
+        // Shell Panel
+        if (sessionManagerCard != null) {
+            sessionManagerCard.setBackground(UITheme.getCardBg());
+            sessionManagerCard.setBorder(UITheme.createCardBorder());
+        }
+        if (sessionTitle != null) sessionTitle.setForeground(UITheme.getTextSecondary());
+        if (sessionTable != null) {
+            UITheme.styleTable(sessionTable);
+            callbacks.customizeUiComponent(sessionTable);
+            callbacks.customizeUiComponent(sessionTable.getTableHeader());
+        }
+        if (sessionScroll != null) {
+            sessionScroll.setBorder(new LineBorder(UITheme.getBorderColor(), 1));
+            sessionScroll.getViewport().setBackground(UITheme.getCardBg());
+            callbacks.customizeUiComponent(sessionScroll);
+        }
+        if (waitingShellLabel != null) waitingShellLabel.setForeground(UITheme.getTextMuted());
+        if (assistBar != null) assistBar.setBackground(UITheme.getCardBg());
+        if (shellStatusLabel != null) shellStatusLabel.setForeground(UITheme.getTextMuted());
+        if (quickLabel != null) quickLabel.setForeground(UITheme.getTextSecondary());
+        if (quickCommandsCombo != null) {
+            UITheme.styleComboBox(quickCommandsCombo);
+            callbacks.customizeUiComponent(quickCommandsCombo);
+        }
+        if (inputBar != null) inputBar.setBackground(UITheme.getCardBg());
+        if (promptText != null) promptText.setForeground(UITheme.STATUS_INFO);
+        if (shellInputField != null) {
+            UITheme.styleTextField(shellInputField);
+            callbacks.customizeUiComponent(shellInputField);
+        }
+
+        // Payload Generator Panel
+        if (controlsCard != null) {
+            controlsCard.setBackground(UITheme.getCardBg());
+            controlsCard.setBorder(UITheme.createCardBorder());
+        }
+        if (searchLabel != null) searchLabel.setForeground(UITheme.getTextSecondary());
+        if (catLabel != null) catLabel.setForeground(UITheme.getTextSecondary());
+        if (osLabel != null) osLabel.setForeground(UITheme.getTextSecondary());
+        if (tplLabel != null) tplLabel.setForeground(UITheme.getTextSecondary());
+        if (ipLabel != null) ipLabel.setForeground(UITheme.getTextSecondary());
+        if (payloadPortLabel != null) payloadPortLabel.setForeground(UITheme.getTextSecondary());
+        if (shellLabel != null) shellLabel.setForeground(UITheme.getTextSecondary());
+        if (fileLabel != null) fileLabel.setForeground(UITheme.getTextSecondary());
+        if (encLabel != null) encLabel.setForeground(UITheme.getTextSecondary());
+
+        if (payloadSearchField != null) {
+            UITheme.styleTextField(payloadSearchField);
+            callbacks.customizeUiComponent(payloadSearchField);
+        }
+        if (payloadCategoryCombo != null) {
+            UITheme.styleComboBox(payloadCategoryCombo);
+            callbacks.customizeUiComponent(payloadCategoryCombo);
+        }
+        if (payloadOsCombo != null) {
+            UITheme.styleComboBox(payloadOsCombo);
+            callbacks.customizeUiComponent(payloadOsCombo);
+        }
+        if (payloadTemplateCombo != null) {
+            UITheme.styleComboBox(payloadTemplateCombo);
+            callbacks.customizeUiComponent(payloadTemplateCombo);
+        }
+        if (payloadIpCombo != null) {
+            UITheme.styleComboBox(payloadIpCombo);
+            callbacks.customizeUiComponent(payloadIpCombo);
+        }
+        if (payloadPortField != null) {
+            UITheme.styleTextField(payloadPortField);
+            callbacks.customizeUiComponent(payloadPortField);
+        }
+        if (payloadShellField != null) {
+            UITheme.styleTextField(payloadShellField);
+            callbacks.customizeUiComponent(payloadShellField);
+        }
+        if (payloadTargetFileField != null) {
+            UITheme.styleTextField(payloadTargetFileField);
+            callbacks.customizeUiComponent(payloadTargetFileField);
+        }
+        if (payloadEncodingCombo != null) {
+            UITheme.styleComboBox(payloadEncodingCombo);
+            callbacks.customizeUiComponent(payloadEncodingCombo);
+        }
+
+        if (editorContainer != null) {
+            editorContainer.setBackground(UITheme.getCardBg());
+            editorContainer.setBorder(UITheme.createTitledCardBorder("GENERATED PAYLOAD"));
+        }
+        if (descWrapper != null) {
+            descWrapper.setBackground(UITheme.getCardBg());
+            descWrapper.setBorder(UITheme.createTitledCardBorder("TEMPLATE DETAILS & PREREQUISITES"));
+        }
+        if (payloadDescriptionArea != null) {
+            payloadDescriptionArea.setBackground(UITheme.getCardHeaderBg());
+            payloadDescriptionArea.setForeground(UITheme.getTextSecondary());
+            callbacks.customizeUiComponent(payloadDescriptionArea);
+        }
+        if (payloadEditor != null) callbacks.customizeUiComponent(payloadEditor.getComponent());
+        if (mainTabs != null) callbacks.customizeUiComponent(mainTabs);
+
+        revalidate();
+        repaint();
+    }
+
     private void initUI() {
-        JTabbedPane mainTabs = new JTabbedPane();
+        mainTabs = new JTabbedPane();
         mainTabs.setFont(UITheme.FONT_TITLE);
+        callbacks.customizeUiComponent(mainTabs);
 
         // Tab 1: Listener
         JPanel listenerTab = createListenerTab();
@@ -231,35 +493,38 @@ public class ReverseShellReceiverPanel extends JPanel {
         topSection.setOpaque(false);
 
         // 1. Control Bar
-        JPanel controlBar = new JPanel(new BorderLayout(8, 0));
-        controlBar.setBackground(UITheme.CARD_BG);
+        controlBar = new JPanel(new BorderLayout(8, 0));
+        controlBar.setBackground(UITheme.getCardBg());
         controlBar.setBorder(UITheme.createCardBorder());
 
         // Left Controls (Mode, Port, TLS)
         JPanel leftControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         leftControls.setOpaque(false);
 
-        JLabel modeLabel = new JLabel("MODE:");
+        modeLabel = new JLabel("MODE:");
         modeLabel.setFont(UITheme.FONT_SUBTITLE);
-        modeLabel.setForeground(UITheme.TEXT_SECONDARY);
+        modeLabel.setForeground(UITheme.getTextSecondary());
 
         modeCombo = new JComboBox<>(new String[] { "HTTP Webhook", "Reverse Shell" });
         UITheme.styleComboBox(modeCombo);
         modeCombo.setPreferredSize(new Dimension(140, 28));
+        callbacks.customizeUiComponent(modeCombo);
 
-        JLabel portLabel = new JLabel("PORT:");
+        portLabel = new JLabel("PORT:");
         portLabel.setFont(UITheme.FONT_SUBTITLE);
-        portLabel.setForeground(UITheme.TEXT_SECONDARY);
+        portLabel.setForeground(UITheme.getTextSecondary());
 
         portField = new JTextField("8080", 6);
         UITheme.styleTextField(portField);
         portField.setPreferredSize(new Dimension(68, 28));
+        callbacks.customizeUiComponent(portField);
 
         tlsCheckBox = new JCheckBox("TLS/SSL Socket");
         tlsCheckBox.setFont(UITheme.FONT_SMALL);
         tlsCheckBox.setOpaque(false);
-        tlsCheckBox.setForeground(UITheme.TEXT_SECONDARY);
+        tlsCheckBox.setForeground(UITheme.getTextSecondary());
         tlsCheckBox.setToolTipText("Enable SSL/TLS listener socket for encrypted reverse shells or HTTPS webhook");
+        callbacks.customizeUiComponent(tlsCheckBox);
 
         leftControls.add(modeLabel);
         leftControls.add(modeCombo);
@@ -300,8 +565,8 @@ public class ReverseShellReceiverPanel extends JPanel {
         controlBar.add(rightActions, BorderLayout.EAST);
 
         // 2. Status Card
-        JPanel statusCard = new JPanel(new BorderLayout(14, 0));
-        statusCard.setBackground(UITheme.CARD_BG);
+        statusCard = new JPanel(new BorderLayout(14, 0));
+        statusCard.setBackground(UITheme.getCardBg());
         statusCard.setBorder(UITheme.createCardBorder());
 
         // Status Badge Column
@@ -321,9 +586,9 @@ public class ReverseShellReceiverPanel extends JPanel {
         statusField.setMaximumSize(new Dimension(100, 26));
         statusField.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel statusSub = new JLabel("LISTENER STATUS");
+        statusSub = new JLabel("LISTENER STATUS");
         statusSub.setFont(UITheme.FONT_BADGE);
-        statusSub.setForeground(UITheme.TEXT_MUTED);
+        statusSub.setForeground(UITheme.getTextMuted());
         statusSub.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         statusLeft.add(statusField);
@@ -331,26 +596,26 @@ public class ReverseShellReceiverPanel extends JPanel {
         statusLeft.add(statusSub);
 
         // Listening Addresses Column
-        JPanel statusRight = new JPanel(new BorderLayout(0, 3));
+        statusRight = new JPanel(new BorderLayout(0, 3));
         statusRight.setOpaque(false);
         statusRight.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 1, 0, 0, UITheme.BORDER_LIGHT),
+                BorderFactory.createMatteBorder(0, 1, 0, 0, UITheme.getBorderColor()),
                 new EmptyBorder(0, 14, 0, 0)));
 
-        JLabel addrHeader = new JLabel("LISTENING ADDRESSES");
+        addrHeader = new JLabel("LISTENING ADDRESSES");
         addrHeader.setFont(UITheme.FONT_BADGE);
-        addrHeader.setForeground(UITheme.TEXT_SECONDARY);
+        addrHeader.setForeground(UITheme.getTextSecondary());
 
         ipListPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         ipListPanel.setOpaque(false);
-        JLabel waitingLabel = new JLabel("Listener is currently inactive.");
+        waitingLabel = new JLabel("Listener is currently inactive.");
         waitingLabel.setFont(UITheme.FONT_SMALL);
-        waitingLabel.setForeground(UITheme.TEXT_MUTED);
+        waitingLabel.setForeground(UITheme.getTextMuted());
         ipListPanel.add(waitingLabel);
 
         vpnWarningLabel = new JLabel(" ");
         vpnWarningLabel.setFont(UITheme.FONT_SMALL);
-        vpnWarningLabel.setForeground(UITheme.TEXT_MUTED);
+        vpnWarningLabel.setForeground(UITheme.getTextMuted());
 
         statusRight.add(addrHeader, BorderLayout.NORTH);
         statusRight.add(ipListPanel, BorderLayout.CENTER);
@@ -401,16 +666,17 @@ public class ReverseShellReceiverPanel extends JPanel {
         panel.setOpaque(false);
 
         // Filter / Search Toolbar
-        JPanel filterBar = new JPanel(new BorderLayout(8, 0));
-        filterBar.setBackground(UITheme.CARD_BG);
+        filterBar = new JPanel(new BorderLayout(8, 0));
+        filterBar.setBackground(UITheme.getCardBg());
         filterBar.setBorder(new EmptyBorder(4, 8, 4, 8));
 
-        JLabel filterLabel = new JLabel("FILTER REQUESTS:");
+        filterLabel = new JLabel("FILTER REQUESTS:");
         filterLabel.setFont(UITheme.FONT_SUBTITLE);
-        filterLabel.setForeground(UITheme.TEXT_SECONDARY);
+        filterLabel.setForeground(UITheme.getTextSecondary());
 
         webhookFilterField = new JTextField();
         UITheme.styleTextField(webhookFilterField);
+        callbacks.customizeUiComponent(webhookFilterField);
         webhookFilterField.setToolTipText("Filter by Method, Path, Client IP, or Timestamp");
 
         ModernButton clearFilterBtn = new ModernButton("RESET", new Color(100, 116, 139));
@@ -427,19 +693,15 @@ public class ReverseShellReceiverPanel extends JPanel {
         };
 
         webhookTable = new JTable(webhookTableModel);
-        webhookTable.setFont(UITheme.FONT_CODE);
-        webhookTable.getTableHeader().setFont(UITheme.FONT_TITLE);
-        webhookTable.setRowHeight(24);
-        webhookTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        webhookTable.setShowGrid(true);
-        webhookTable.setGridColor(UITheme.BORDER_LIGHT);
-
         webhookTable.getColumnModel().getColumn(0).setPreferredWidth(50);
         webhookTable.getColumnModel().getColumn(1).setPreferredWidth(80);
         webhookTable.getColumnModel().getColumn(2).setPreferredWidth(350);
         webhookTable.getColumnModel().getColumn(3).setPreferredWidth(120);
         webhookTable.getColumnModel().getColumn(4).setPreferredWidth(80);
         webhookTable.getColumnModel().getColumn(5).setPreferredWidth(150);
+        UITheme.styleTable(webhookTable);
+        callbacks.customizeUiComponent(webhookTable);
+        callbacks.customizeUiComponent(webhookTable.getTableHeader());
 
         webhookSorter = new TableRowSorter<>(webhookTableModel);
         webhookTable.setRowSorter(webhookSorter);
@@ -474,9 +736,10 @@ public class ReverseShellReceiverPanel extends JPanel {
             }
         });
 
-        JScrollPane tableScroll = new JScrollPane(webhookTable);
-        tableScroll.setBorder(new LineBorder(UITheme.BORDER_LIGHT, 1));
-        tableScroll.getViewport().setBackground(Color.WHITE);
+        tableScroll = new JScrollPane(webhookTable);
+        tableScroll.setBorder(new LineBorder(UITheme.getBorderColor(), 1));
+        tableScroll.getViewport().setBackground(UITheme.getCardBg());
+        callbacks.customizeUiComponent(tableScroll);
 
         // Native Burp Message Editors
         requestViewer = callbacks.createMessageEditor(this.requestController, false);
@@ -485,22 +748,22 @@ public class ReverseShellReceiverPanel extends JPanel {
         callbacks.customizeUiComponent(responseViewer.getComponent());
 
         JPanel reqPanel = new JPanel(new BorderLayout());
-        JLabel reqTitle = new JLabel(" INBOUND REQUEST");
+        reqTitle = new JLabel(" INBOUND REQUEST");
         reqTitle.setFont(UITheme.FONT_SUBTITLE);
-        reqTitle.setForeground(UITheme.TEXT_SECONDARY);
+        reqTitle.setForeground(UITheme.getTextSecondary());
         reqTitle.setBorder(new EmptyBorder(4, 4, 4, 4));
         reqTitle.setOpaque(true);
-        reqTitle.setBackground(UITheme.CARD_HEADER_BG);
+        reqTitle.setBackground(UITheme.getCardHeaderBg());
         reqPanel.add(reqTitle, BorderLayout.NORTH);
         reqPanel.add(requestViewer.getComponent(), BorderLayout.CENTER);
 
         JPanel respPanel = new JPanel(new BorderLayout());
-        JLabel respTitle = new JLabel(" RETURNED RESPONSE");
+        respTitle = new JLabel(" RETURNED RESPONSE");
         respTitle.setFont(UITheme.FONT_SUBTITLE);
-        respTitle.setForeground(UITheme.TEXT_SECONDARY);
+        respTitle.setForeground(UITheme.getTextSecondary());
         respTitle.setBorder(new EmptyBorder(4, 4, 4, 4));
         respTitle.setOpaque(true);
-        respTitle.setBackground(UITheme.CARD_HEADER_BG);
+        respTitle.setBackground(UITheme.getCardHeaderBg());
         respPanel.add(respTitle, BorderLayout.NORTH);
         respPanel.add(responseViewer.getComponent(), BorderLayout.CENTER);
 
@@ -528,12 +791,9 @@ public class ReverseShellReceiverPanel extends JPanel {
         panel.setOpaque(false);
 
         // --- Top: Multi-Session Manager Card ---
-        JPanel sessionManagerCard = new JPanel(new BorderLayout(8, 4));
-        sessionManagerCard.setBackground(UITheme.CARD_BG);
-        sessionManagerCard.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(UITheme.BORDER_LIGHT, 1),
-                new EmptyBorder(6, 10, 6, 10)
-        ));
+        sessionManagerCard = new JPanel(new BorderLayout(8, 4));
+        sessionManagerCard.setBackground(UITheme.getCardBg());
+        sessionManagerCard.setBorder(UITheme.createCardBorder());
 
         // Session Table
         String[] sessionCols = { "#", "Remote Host", "Port", "OS Type", "Connected At", "Uptime", "Status" };
@@ -542,13 +802,6 @@ public class ReverseShellReceiverPanel extends JPanel {
         };
 
         sessionTable = new JTable(sessionTableModel);
-        sessionTable.setFont(UITheme.FONT_CODE);
-        sessionTable.getTableHeader().setFont(UITheme.FONT_SUBTITLE);
-        sessionTable.setRowHeight(22);
-        sessionTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        sessionTable.setShowGrid(true);
-        sessionTable.setGridColor(UITheme.BORDER_LIGHT);
-
         sessionTable.getColumnModel().getColumn(0).setPreferredWidth(40);
         sessionTable.getColumnModel().getColumn(1).setPreferredWidth(120);
         sessionTable.getColumnModel().getColumn(2).setPreferredWidth(60);
@@ -556,20 +809,42 @@ public class ReverseShellReceiverPanel extends JPanel {
         sessionTable.getColumnModel().getColumn(4).setPreferredWidth(140);
         sessionTable.getColumnModel().getColumn(5).setPreferredWidth(90);
         sessionTable.getColumnModel().getColumn(6).setPreferredWidth(80);
+        UITheme.styleTable(sessionTable);
+        callbacks.customizeUiComponent(sessionTable);
+        callbacks.customizeUiComponent(sessionTable.getTableHeader());
 
-        sessionTable.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                int row = sessionTable.getSelectedRow();
-                if (row >= 0) {
+        sessionTable.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                int row = sessionTable.rowAtPoint(e.getPoint());
+                if (row >= 0 && row < sessionTableModel.getRowCount()) {
                     int sid = (Integer) sessionTableModel.getValueAt(row, 0);
-                    sessionManager.selectSessionById(sid);
+                    ShellSession cur = sessionManager.getActiveSession();
+                    if (cur == null || cur.getId() != sid) {
+                        sessionManager.selectSessionById(sid);
+                    }
                 }
             }
         });
 
-        JScrollPane sessionScroll = new JScrollPane(sessionTable);
+        sessionTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting() && !isUpdatingTable) {
+                int row = sessionTable.getSelectedRow();
+                if (row >= 0 && row < sessionTableModel.getRowCount()) {
+                    int sid = (Integer) sessionTableModel.getValueAt(row, 0);
+                    ShellSession cur = sessionManager.getActiveSession();
+                    if (cur == null || cur.getId() != sid) {
+                        sessionManager.selectSessionById(sid);
+                    }
+                }
+            }
+        });
+
+        sessionScroll = new JScrollPane(sessionTable);
         sessionScroll.setPreferredSize(new Dimension(0, 85));
-        sessionScroll.setBorder(new LineBorder(UITheme.BORDER_LIGHT, 1));
+        sessionScroll.setBorder(new LineBorder(UITheme.getBorderColor(), 1));
+        sessionScroll.getViewport().setBackground(UITheme.getCardBg());
+        callbacks.customizeUiComponent(sessionScroll);
 
         // Session Manager Actions
         JPanel sessionActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
@@ -596,7 +871,10 @@ public class ReverseShellReceiverPanel extends JPanel {
         sessionActions.add(exportLogButton);
         sessionActions.add(terminateSessionButton);
 
-        sessionManagerCard.add(new JLabel("ACTIVE REVERSE SHELL SESSIONS:"), BorderLayout.NORTH);
+        sessionTitle = new JLabel("ACTIVE REVERSE SHELL SESSIONS:");
+        sessionTitle.setFont(UITheme.FONT_SUBTITLE);
+        sessionTitle.setForeground(UITheme.getTextSecondary());
+        sessionManagerCard.add(sessionTitle, BorderLayout.NORTH);
         sessionManagerCard.add(sessionScroll, BorderLayout.CENTER);
         sessionManagerCard.add(sessionActions, BorderLayout.SOUTH);
 
@@ -605,9 +883,9 @@ public class ReverseShellReceiverPanel extends JPanel {
         shellTerminalContainer.setBackground(UITheme.TERM_BG);
         shellTerminalContainer.setBorder(new LineBorder(UITheme.BORDER_DARK, 1));
 
-        JLabel waitingShellLabel = new JLabel("Waiting for inbound reverse shell sessions...", SwingConstants.CENTER);
+        waitingShellLabel = new JLabel("Waiting for inbound reverse shell sessions...", SwingConstants.CENTER);
         waitingShellLabel.setFont(UITheme.FONT_CODE);
-        waitingShellLabel.setForeground(UITheme.TEXT_MUTED);
+        waitingShellLabel.setForeground(UITheme.getTextMuted());
         shellTerminalContainer.add(waitingShellLabel, BorderLayout.CENTER);
 
         // --- Bottom: Assist Bar & Command Input Bar ---
@@ -615,20 +893,20 @@ public class ReverseShellReceiverPanel extends JPanel {
         shellBottom.setOpaque(false);
 
         // 1. Assist Bar (Quick commands & Session Status)
-        JPanel assistBar = new JPanel(new BorderLayout(8, 0));
-        assistBar.setBackground(UITheme.CARD_BG);
+        assistBar = new JPanel(new BorderLayout(8, 0));
+        assistBar.setBackground(UITheme.getCardBg());
         assistBar.setBorder(new EmptyBorder(4, 8, 4, 8));
 
         shellStatusLabel = new JLabel("STATUS: WAITING FOR INBOUND CONNECTION");
         shellStatusLabel.setFont(UITheme.FONT_SUBTITLE);
-        shellStatusLabel.setForeground(UITheme.TEXT_MUTED);
+        shellStatusLabel.setForeground(UITheme.getTextMuted());
 
         JPanel quickActionsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         quickActionsPanel.setOpaque(false);
 
-        JLabel quickLabel = new JLabel("QUICK ACTION:");
+        quickLabel = new JLabel("QUICK ACTION:");
         quickLabel.setFont(UITheme.FONT_SUBTITLE);
-        quickLabel.setForeground(UITheme.TEXT_SECONDARY);
+        quickLabel.setForeground(UITheme.getTextSecondary());
 
         quickCommandsCombo = new JComboBox<>(new String[] {
                 "Select Command...",
@@ -644,6 +922,7 @@ public class ReverseShellReceiverPanel extends JPanel {
                 "Clear Terminal Screen"
         });
         UITheme.styleComboBox(quickCommandsCombo);
+        callbacks.customizeUiComponent(quickCommandsCombo);
         quickCommandsCombo.setPreferredSize(new Dimension(240, 26));
 
         quickCommandsCombo.addActionListener(e -> {
@@ -661,11 +940,11 @@ public class ReverseShellReceiverPanel extends JPanel {
         assistBar.add(quickActionsPanel, BorderLayout.EAST);
 
         // 2. Command Input Bar
-        JPanel inputBar = new JPanel(new BorderLayout(8, 0));
-        inputBar.setBackground(UITheme.CARD_BG);
+        inputBar = new JPanel(new BorderLayout(8, 0));
+        inputBar.setBackground(UITheme.getCardBg());
         inputBar.setBorder(new EmptyBorder(6, 8, 6, 8));
 
-        JLabel promptText = new JLabel("COMMAND >");
+        promptText = new JLabel("COMMAND >");
         promptText.setFont(UITheme.FONT_CODE_BOLD);
         promptText.setForeground(UITheme.STATUS_INFO);
 
@@ -673,16 +952,26 @@ public class ReverseShellReceiverPanel extends JPanel {
         shellInputField.setFont(UITheme.FONT_CODE);
         shellInputField.setEnabled(false);
         UITheme.styleTextField(shellInputField);
+        callbacks.customizeUiComponent(shellInputField);
 
-        // Command history navigation
+        // Command history navigation (Up / Down arrows)
         shellInputField.addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
                 ShellSession current = sessionManager.getActiveSession();
                 if (current == null) return;
-                List<String> hist = current.getCommandHistory();
-                if (e.getKeyCode() == KeyEvent.VK_UP && !hist.isEmpty()) {
-                    shellInputField.setText(hist.get(hist.size() - 1));
+                if (e.getKeyCode() == KeyEvent.VK_UP) {
+                    String prev = current.getPreviousHistoryCommand();
+                    if (prev != null) {
+                        shellInputField.setText(prev);
+                    }
+                    e.consume();
+                } else if (e.getKeyCode() == KeyEvent.VK_DOWN) {
+                    String next = current.getNextHistoryCommand();
+                    if (next != null) {
+                        shellInputField.setText(next);
+                    }
+                    e.consume();
                 }
             }
         });
@@ -706,7 +995,7 @@ public class ReverseShellReceiverPanel extends JPanel {
         });
         shellClearButton.addActionListener(e -> {
             ShellSession current = sessionManager.getActiveSession();
-            if (current != null) current.getDisplayPane().setText("");
+            if (current != null) current.clearTerminal();
         });
 
         inputActions.add(shellSendButton);
@@ -731,29 +1020,52 @@ public class ReverseShellReceiverPanel extends JPanel {
     }
 
     private void updateSessionTable() {
-        sessionTableModel.setRowCount(0);
-        List<ShellSession> list = sessionManager.getAllSessions();
-        ShellSession active = sessionManager.getActiveSession();
+        if (sessionTableModel == null || sessionTable == null) return;
+        isUpdatingTable = true;
+        try {
+            List<ShellSession> list = sessionManager.getAllSessions();
+            ShellSession active = sessionManager.getActiveSession();
+            int currentCount = sessionTableModel.getRowCount();
 
-        for (ShellSession s : list) {
-            sessionTableModel.addRow(new Object[] {
-                    s.getId(),
-                    s.getRemoteAddress(),
-                    s.getRemotePort(),
-                    s.getShellType().getLabel(),
-                    s.getConnectedTimeString(),
-                    s.getUptime(),
-                    s.isActive() ? "ACTIVE" : "CLOSED"
-            });
-        }
-
-        if (active != null) {
-            for (int i = 0; i < sessionTableModel.getRowCount(); i++) {
-                if ((Integer) sessionTableModel.getValueAt(i, 0) == active.getId()) {
-                    sessionTable.setRowSelectionInterval(i, i);
-                    break;
+            if (currentCount != list.size()) {
+                sessionTableModel.setRowCount(0);
+                for (ShellSession s : list) {
+                    sessionTableModel.addRow(new Object[] {
+                            s.getId(),
+                            s.getRemoteAddress(),
+                            s.getRemotePort(),
+                            s.getShellType().getLabel(),
+                            s.getConnectedTimeString(),
+                            s.getUptime(),
+                            s.isActive() ? "ACTIVE" : "CLOSED"
+                    });
+                }
+            } else {
+                for (int i = 0; i < list.size(); i++) {
+                    ShellSession s = list.get(i);
+                    sessionTableModel.setValueAt(s.getId(), i, 0);
+                    sessionTableModel.setValueAt(s.getRemoteAddress(), i, 1);
+                    sessionTableModel.setValueAt(s.getRemotePort(), i, 2);
+                    sessionTableModel.setValueAt(s.getShellType().getLabel(), i, 3);
+                    sessionTableModel.setValueAt(s.getConnectedTimeString(), i, 4);
+                    sessionTableModel.setValueAt(s.getUptime(), i, 5);
+                    sessionTableModel.setValueAt(s.isActive() ? "ACTIVE" : "CLOSED", i, 6);
                 }
             }
+
+            if (active != null) {
+                int selectedRow = sessionTable.getSelectedRow();
+                for (int i = 0; i < sessionTableModel.getRowCount(); i++) {
+                    if ((Integer) sessionTableModel.getValueAt(i, 0) == active.getId()) {
+                        if (selectedRow != i) {
+                            sessionTable.setRowSelectionInterval(i, i);
+                        }
+                        break;
+                    }
+                }
+            }
+        } finally {
+            isUpdatingTable = false;
         }
     }
 
@@ -819,7 +1131,7 @@ public class ReverseShellReceiverPanel extends JPanel {
         if (current == null || !current.isActive()) return;
 
         if ("Clear Terminal Screen".equals(action)) {
-            current.getDisplayPane().setText("");
+            current.clearTerminal();
             return;
         }
 
@@ -867,8 +1179,8 @@ public class ReverseShellReceiverPanel extends JPanel {
         panel.setOpaque(false);
 
         // Top Control Grid
-        JPanel controlsCard = new JPanel(new BorderLayout(0, 8));
-        controlsCard.setBackground(UITheme.CARD_BG);
+        controlsCard = new JPanel(new BorderLayout(0, 8));
+        controlsCard.setBackground(UITheme.getCardBg());
         controlsCard.setBorder(UITheme.createCardBorder());
 
         // Row 1: Search & Categories
@@ -880,22 +1192,23 @@ public class ReverseShellReceiverPanel extends JPanel {
 
         // Search
         gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel searchLabel = new JLabel("SEARCH TEMPLATES:");
+        searchLabel = new JLabel("SEARCH TEMPLATES:");
         searchLabel.setFont(UITheme.FONT_SUBTITLE);
-        searchLabel.setForeground(UITheme.TEXT_SECONDARY);
+        searchLabel.setForeground(UITheme.getTextSecondary());
         row1.add(searchLabel, gbc);
 
         gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 0.3;
         payloadSearchField = new JTextField();
         UITheme.styleTextField(payloadSearchField);
+        callbacks.customizeUiComponent(payloadSearchField);
         payloadSearchField.setToolTipText("Filter by name, tool, or keyword (e.g. socat, tls, pty, amsi)");
         row1.add(payloadSearchField, gbc);
 
         // Category
         gbc.gridx = 2; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel catLabel = new JLabel("CATEGORY:");
+        catLabel = new JLabel("CATEGORY:");
         catLabel.setFont(UITheme.FONT_SUBTITLE);
-        catLabel.setForeground(UITheme.TEXT_SECONDARY);
+        catLabel.setForeground(UITheme.getTextSecondary());
         row1.add(catLabel, gbc);
 
         gbc.gridx = 3; gbc.gridy = 0; gbc.weightx = 0.3;
@@ -908,13 +1221,14 @@ public class ReverseShellReceiverPanel extends JPanel {
                 PayloadCategory.STAGERS_HELPERS.getDisplayName()
         });
         UITheme.styleComboBox(payloadCategoryCombo);
+        callbacks.customizeUiComponent(payloadCategoryCombo);
         row1.add(payloadCategoryCombo, gbc);
 
         // OS
         gbc.gridx = 4; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel osLabel = new JLabel("TARGET OS:");
+        osLabel = new JLabel("TARGET OS:");
         osLabel.setFont(UITheme.FONT_SUBTITLE);
-        osLabel.setForeground(UITheme.TEXT_SECONDARY);
+        osLabel.setForeground(UITheme.getTextSecondary());
         row1.add(osLabel, gbc);
 
         gbc.gridx = 5; gbc.gridy = 0; gbc.weightx = 0.2;
@@ -926,6 +1240,7 @@ public class ReverseShellReceiverPanel extends JPanel {
                 "Cross-Platform"
         });
         UITheme.styleComboBox(payloadOsCombo);
+        callbacks.customizeUiComponent(payloadOsCombo);
         row1.add(payloadOsCombo, gbc);
 
         // Row 2: Template Selection & Parameters
@@ -934,40 +1249,43 @@ public class ReverseShellReceiverPanel extends JPanel {
 
         // Template Combo
         gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel tplLabel = new JLabel("TEMPLATE:");
+        tplLabel = new JLabel("TEMPLATE:");
         tplLabel.setFont(UITheme.FONT_SUBTITLE);
-        tplLabel.setForeground(UITheme.TEXT_SECONDARY);
+        tplLabel.setForeground(UITheme.getTextSecondary());
         row2.add(tplLabel, gbc);
 
         gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 0.4;
         payloadTemplateCombo = new JComboBox<>();
         UITheme.styleComboBox(payloadTemplateCombo);
+        callbacks.customizeUiComponent(payloadTemplateCombo);
         row2.add(payloadTemplateCombo, gbc);
 
         // IP
         gbc.gridx = 2; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel ipLabel = new JLabel("ATTACKER IP:");
+        ipLabel = new JLabel("ATTACKER IP:");
         ipLabel.setFont(UITheme.FONT_SUBTITLE);
-        ipLabel.setForeground(UITheme.TEXT_SECONDARY);
+        ipLabel.setForeground(UITheme.getTextSecondary());
         row2.add(ipLabel, gbc);
 
         gbc.gridx = 3; gbc.gridy = 0; gbc.weightx = 0.2;
         payloadIpCombo = new JComboBox<>();
         payloadIpCombo.setEditable(true);
         UITheme.styleComboBox(payloadIpCombo);
+        callbacks.customizeUiComponent(payloadIpCombo);
         populateIpAddresses(payloadIpCombo);
         row2.add(payloadIpCombo, gbc);
 
         // Port
         gbc.gridx = 4; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel portLabel = new JLabel("PORT:");
-        portLabel.setFont(UITheme.FONT_SUBTITLE);
-        portLabel.setForeground(UITheme.TEXT_SECONDARY);
-        row2.add(portLabel, gbc);
+        payloadPortLabel = new JLabel("PORT:");
+        payloadPortLabel.setFont(UITheme.FONT_SUBTITLE);
+        payloadPortLabel.setForeground(UITheme.getTextSecondary());
+        row2.add(payloadPortLabel, gbc);
 
         gbc.gridx = 5; gbc.gridy = 0; gbc.weightx = 0.1;
         payloadPortField = new JTextField("4444", 6);
         UITheme.styleTextField(payloadPortField);
+        callbacks.customizeUiComponent(payloadPortField);
         row2.add(payloadPortField, gbc);
 
         // Row 3: Advanced Parameters & Encoding
@@ -976,38 +1294,41 @@ public class ReverseShellReceiverPanel extends JPanel {
 
         // Shell Binary
         gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel shellLabel = new JLabel("SHELL BINARY:");
+        shellLabel = new JLabel("SHELL BINARY:");
         shellLabel.setFont(UITheme.FONT_SUBTITLE);
-        shellLabel.setForeground(UITheme.TEXT_SECONDARY);
+        shellLabel.setForeground(UITheme.getTextSecondary());
         row3.add(shellLabel, gbc);
 
         gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 0.2;
         payloadShellField = new JTextField("/bin/bash", 12);
         UITheme.styleTextField(payloadShellField);
+        callbacks.customizeUiComponent(payloadShellField);
         row3.add(payloadShellField, gbc);
 
         // Target File / Cmd
         gbc.gridx = 2; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel fileLabel = new JLabel("TARGET FILE / CMD:");
+        fileLabel = new JLabel("TARGET FILE / CMD:");
         fileLabel.setFont(UITheme.FONT_SUBTITLE);
-        fileLabel.setForeground(UITheme.TEXT_SECONDARY);
+        fileLabel.setForeground(UITheme.getTextSecondary());
         row3.add(fileLabel, gbc);
 
         gbc.gridx = 3; gbc.gridy = 0; gbc.weightx = 0.25;
         payloadTargetFileField = new JTextField("/etc/passwd", 14);
         UITheme.styleTextField(payloadTargetFileField);
+        callbacks.customizeUiComponent(payloadTargetFileField);
         row3.add(payloadTargetFileField, gbc);
 
         // Encoding
         gbc.gridx = 4; gbc.gridy = 0; gbc.weightx = 0.0;
-        JLabel encLabel = new JLabel("ENCODING:");
+        encLabel = new JLabel("ENCODING:");
         encLabel.setFont(UITheme.FONT_SUBTITLE);
-        encLabel.setForeground(UITheme.TEXT_SECONDARY);
+        encLabel.setForeground(UITheme.getTextSecondary());
         row3.add(encLabel, gbc);
 
         gbc.gridx = 5; gbc.gridy = 0; gbc.weightx = 0.25;
         payloadEncodingCombo = new JComboBox<>(EncodingType.values());
         UITheme.styleComboBox(payloadEncodingCombo);
+        callbacks.customizeUiComponent(payloadEncodingCombo);
         row3.add(payloadEncodingCombo, gbc);
 
         // Row 4: Action Buttons
@@ -1048,12 +1369,9 @@ public class ReverseShellReceiverPanel extends JPanel {
         payloadEditor.setEditable(false);
         callbacks.customizeUiComponent(payloadEditor.getComponent());
 
-        JPanel editorContainer = new JPanel(new BorderLayout());
-        editorContainer.setBorder(new CompoundBorder(
-                new TitledBorder(new LineBorder(UITheme.BORDER_LIGHT, 1), "GENERATED PAYLOAD", TitledBorder.LEFT, TitledBorder.TOP, UITheme.FONT_SUBTITLE, UITheme.TEXT_SECONDARY),
-                new EmptyBorder(4, 4, 4, 4)
-        ));
-        editorContainer.setBackground(UITheme.CARD_BG);
+        editorContainer = new JPanel(new BorderLayout());
+        editorContainer.setBorder(UITheme.createTitledCardBorder("GENERATED PAYLOAD"));
+        editorContainer.setBackground(UITheme.getCardBg());
         editorContainer.add(payloadEditor.getComponent(), BorderLayout.CENTER);
 
         // Description Box
@@ -1062,16 +1380,14 @@ public class ReverseShellReceiverPanel extends JPanel {
         payloadDescriptionArea.setEditable(false);
         payloadDescriptionArea.setLineWrap(true);
         payloadDescriptionArea.setWrapStyleWord(true);
-        payloadDescriptionArea.setBackground(UITheme.CARD_HEADER_BG);
-        payloadDescriptionArea.setForeground(UITheme.TEXT_SECONDARY);
+        payloadDescriptionArea.setBackground(UITheme.getCardHeaderBg());
+        payloadDescriptionArea.setForeground(UITheme.getTextSecondary());
         payloadDescriptionArea.setBorder(new EmptyBorder(6, 10, 6, 10));
+        callbacks.customizeUiComponent(payloadDescriptionArea);
 
-        JPanel descWrapper = new JPanel(new BorderLayout());
-        descWrapper.setBorder(new CompoundBorder(
-                new TitledBorder(new LineBorder(UITheme.BORDER_LIGHT, 1), "TEMPLATE DETAILS & PREREQUISITES", TitledBorder.LEFT, TitledBorder.TOP, UITheme.FONT_SUBTITLE, UITheme.TEXT_SECONDARY),
-                new EmptyBorder(2, 4, 4, 4)
-        ));
-        descWrapper.setBackground(UITheme.CARD_BG);
+        descWrapper = new JPanel(new BorderLayout());
+        descWrapper.setBorder(UITheme.createTitledCardBorder("TEMPLATE DETAILS & PREREQUISITES"));
+        descWrapper.setBackground(UITheme.getCardBg());
         descWrapper.add(payloadDescriptionArea, BorderLayout.CENTER);
 
         JSplitPane payloadSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, editorContainer, descWrapper);
@@ -1481,9 +1797,10 @@ public class ReverseShellReceiverPanel extends JPanel {
         }
 
         JTable table = new JTable(model);
-        table.setFont(UITheme.FONT_CODE);
-        table.setRowHeight(24);
+        UITheme.styleTable(table);
         table.getColumnModel().getColumn(0).setMaxWidth(60);
+        callbacks.customizeUiComponent(table);
+        callbacks.customizeUiComponent(table.getTableHeader());
 
         model.addTableModelListener(e -> {
             int row = e.getFirstRow();
@@ -1548,6 +1865,8 @@ public class ReverseShellReceiverPanel extends JPanel {
                 "404 Not Found", "500 Internal Server Error"
         });
         statusCombo.setSelectedItem(webhookConfig.getStatusCode());
+        UITheme.styleComboBox(statusCombo);
+        callbacks.customizeUiComponent(statusCombo);
         form.add(statusCombo, gbc);
 
         // Content Type
@@ -1560,6 +1879,8 @@ public class ReverseShellReceiverPanel extends JPanel {
         });
         ctCombo.setEditable(true);
         ctCombo.setSelectedItem(webhookConfig.getContentType());
+        UITheme.styleComboBox(ctCombo);
+        callbacks.customizeUiComponent(ctCombo);
         form.add(ctCombo, gbc);
 
         // CORS
@@ -1567,6 +1888,7 @@ public class ReverseShellReceiverPanel extends JPanel {
         form.add(new JLabel("CORS Headers:"), gbc);
         gbc.gridx = 1; gbc.gridy = 2; gbc.weightx = 1.0;
         JCheckBox corsBox = new JCheckBox("Enable Access-Control-Allow-Origin: *", webhookConfig.isEnableCors());
+        callbacks.customizeUiComponent(corsBox);
         form.add(corsBox, gbc);
 
         // Response Body
@@ -1575,6 +1897,10 @@ public class ReverseShellReceiverPanel extends JPanel {
         gbc.gridx = 1; gbc.gridy = 3; gbc.weightx = 1.0; gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
         JTextArea bodyArea = new JTextArea(webhookConfig.getResponseBody(), 6, 30);
         bodyArea.setFont(UITheme.FONT_CODE);
+        bodyArea.setBackground(UITheme.isDarkMode() ? UITheme.DARK_INPUT_BG : Color.WHITE);
+        bodyArea.setForeground(UITheme.getTextPrimary());
+        bodyArea.setCaretColor(UITheme.getTextPrimary());
+        callbacks.customizeUiComponent(bodyArea);
         form.add(new JScrollPane(bodyArea), gbc);
 
         // Buttons
@@ -1633,9 +1959,10 @@ public class ReverseShellReceiverPanel extends JPanel {
         }
 
         JTable table = new JTable(model);
-        table.setFont(UITheme.FONT_CODE);
-        table.setRowHeight(24);
+        UITheme.styleTable(table);
         table.getColumnModel().getColumn(0).setMaxWidth(50);
+        callbacks.customizeUiComponent(table);
+        callbacks.customizeUiComponent(table.getTableHeader());
 
         JPanel footer = new JPanel(new BorderLayout());
         footer.setBorder(new EmptyBorder(8, 14, 8, 14));
@@ -1759,7 +2086,7 @@ public class ReverseShellReceiverPanel extends JPanel {
         ipListPanel.removeAll();
         JLabel waiting = new JLabel("Listener is currently inactive.");
         waiting.setFont(UITheme.FONT_SMALL);
-        waiting.setForeground(UITheme.TEXT_MUTED);
+        waiting.setForeground(UITheme.getTextMuted());
         ipListPanel.add(waiting);
         ipListPanel.revalidate();
         ipListPanel.repaint();

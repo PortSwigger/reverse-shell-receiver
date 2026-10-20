@@ -47,7 +47,8 @@ public class SessionManager {
         ShellSession session = new ShellSession(id, socket, callbacks, new ShellSession.SessionEventListener() {
             @Override
             public void onSessionOutput(ShellSession s, String text) {
-                if (listener != null) listener.onSessionStateChanged();
+                // Session output is appended directly to the session's displayPane;
+                // do not trigger onSessionStateChanged to avoid disruptive table rebuilds.
             }
 
             @Override

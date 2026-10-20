@@ -5,7 +5,10 @@ import javax.swing.border.Border;
 import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
+import javax.swing.border.TitledBorder;
 import java.awt.*;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Clean, modern, and elegant UI theme constants and styling utilities.
@@ -57,13 +60,138 @@ public final class UITheme {
     public static final Font FONT_CODE_BOLD = new Font("Consolas", Font.BOLD, 12);
     public static final Font FONT_BADGE = new Font("Segoe UI", Font.BOLD, 10);
 
+    // --- Theme Change Listeners Registry ---
+    private static final List<Runnable> themeChangeListeners = new CopyOnWriteArrayList<>();
+
+    static {
+        try {
+            UIManager.addPropertyChangeListener(evt -> {
+                if ("lookAndFeel".equals(evt.getPropertyName())) {
+                    fireThemeChanged();
+                }
+            });
+        } catch (Exception ignored) {}
+    }
+
+    public static void addThemeChangeListener(Runnable listener) {
+        if (listener != null) {
+            themeChangeListeners.add(listener);
+        }
+    }
+
+    public static void removeThemeChangeListener(Runnable listener) {
+        if (listener != null) {
+            themeChangeListeners.remove(listener);
+        }
+    }
+
+    public static void fireThemeChanged() {
+        for (Runnable r : themeChangeListeners) {
+            try {
+                r.run();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Determines if the current Look and Feel or Burp Suite environment is in Dark Mode.
+     */
+    public static boolean isDarkMode() {
+        Object flatLafDark = UIManager.get("laf.dark");
+        if (flatLafDark instanceof Boolean) {
+            return (Boolean) flatLafDark;
+        }
+
+        LookAndFeel laf = UIManager.getLookAndFeel();
+        if (laf != null) {
+            String name = (laf.getName() + " " + laf.getID() + " " + laf.getClass().getName()).toLowerCase();
+            if (name.contains("dark") || name.contains("darcula")) {
+                return true;
+            }
+        }
+
+        Color bg = UIManager.getColor("Panel.background");
+        if (bg == null) {
+            bg = UIManager.getColor("control");
+        }
+        if (bg != null) {
+            double luminance = (0.299 * bg.getRed() + 0.587 * bg.getGreen() + 0.114 * bg.getBlue());
+            return luminance < 128.0;
+        }
+
+        Color fg = UIManager.getColor("Label.foreground");
+        if (fg == null) {
+            fg = UIManager.getColor("textText");
+        }
+        if (fg != null) {
+            double fgLuminance = (0.299 * fg.getRed() + 0.587 * fg.getGreen() + 0.114 * fg.getBlue());
+            if (fgLuminance > 180.0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // --- Dynamic Theme-Aware Getters ---
+
+    public static Color getPrimaryBg() {
+        return isDarkMode() ? new Color(22, 27, 34) : PRIMARY_BG;
+    }
+
+    public static Color getCardBg() {
+        return isDarkMode() ? new Color(30, 36, 46) : CARD_BG;
+    }
+
+    public static Color getCardHeaderBg() {
+        return isDarkMode() ? new Color(38, 44, 54) : CARD_HEADER_BG;
+    }
+
+    public static Color getBorderColor() {
+        return isDarkMode() ? new Color(54, 62, 74) : BORDER_LIGHT;
+    }
+
+    public static Color getTextPrimary() {
+        return isDarkMode() ? new Color(240, 246, 252) : TEXT_PRIMARY;
+    }
+
+    public static Color getTextSecondary() {
+        return isDarkMode() ? new Color(148, 163, 184) : TEXT_SECONDARY;
+    }
+
+    public static Color getTextMuted() {
+        return isDarkMode() ? new Color(100, 116, 139) : TEXT_MUTED;
+    }
+
+    public static Color getDisabledButtonBg() {
+        return isDarkMode() ? new Color(45, 52, 64) : new Color(226, 232, 240);
+    }
+
+    public static Color getDisabledButtonFg() {
+        return isDarkMode() ? new Color(100, 116, 139) : new Color(148, 163, 184);
+    }
+
+    public static Color getTableGridColor() {
+        return isDarkMode() ? new Color(48, 54, 64) : BORDER_LIGHT;
+    }
+
     /**
      * Creates an elegant border for cards and control sections.
      */
     public static Border createCardBorder() {
         return new CompoundBorder(
-                new LineBorder(BORDER_LIGHT, 1, true),
+                new LineBorder(getBorderColor(), 1, true),
                 new EmptyBorder(10, 14, 10, 14)
+        );
+    }
+
+    /**
+     * Creates a modern titled border matching the current theme.
+     */
+    public static Border createTitledCardBorder(String title) {
+        return new CompoundBorder(
+                new TitledBorder(new LineBorder(getBorderColor(), 1), title, TitledBorder.LEFT, TitledBorder.TOP, FONT_SUBTITLE, getTextSecondary()),
+                new EmptyBorder(4, 4, 4, 4)
         );
     }
 
@@ -72,9 +200,50 @@ public final class UITheme {
      */
     public static Border createSectionBorder(int top, int left, int bottom, int right) {
         return new CompoundBorder(
-                new LineBorder(BORDER_LIGHT, 1, false),
+                new LineBorder(getBorderColor(), 1, false),
                 new EmptyBorder(top, left, bottom, right)
         );
+    }
+
+    /**
+     * Creates a consistent table cell renderer that suppresses single-cell focus borders.
+     */
+    public static javax.swing.table.TableCellRenderer createTableCellRenderer() {
+        return new javax.swing.table.DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable table, Object value,
+                                                           boolean isSelected, boolean hasFocus, int row, int column) {
+                // Pass hasFocus = false to prevent Swing's inconsistent single-cell focus border
+                super.getTableCellRendererComponent(table, value, isSelected, false, row, column);
+                setBorder(new EmptyBorder(3, 8, 3, 8));
+                return this;
+            }
+        };
+    }
+
+    /**
+     * Applies uniform, clean styling and cell renderers across all table columns.
+     */
+    public static void styleTable(JTable table) {
+        table.setFont(FONT_CODE);
+        table.getTableHeader().setFont(FONT_SUBTITLE);
+        table.setRowHeight(24);
+        table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        table.setShowGrid(true);
+        table.setShowHorizontalLines(true);
+        table.setShowVerticalLines(true);
+        table.setIntercellSpacing(new Dimension(1, 1));
+        table.setGridColor(getTableGridColor());
+
+        Color tableBg = isDarkMode() ? getCardBg() : Color.WHITE;
+        Color tableFg = getTextPrimary();
+        table.setBackground(tableBg);
+        table.setForeground(tableFg);
+
+        javax.swing.table.TableCellRenderer renderer = createTableCellRenderer();
+        for (int i = 0; i < table.getColumnModel().getColumnCount(); i++) {
+            table.getColumnModel().getColumn(i).setCellRenderer(renderer);
+        }
     }
 
     /**
@@ -83,11 +252,16 @@ public final class UITheme {
     public static void styleTextField(JTextField field) {
         field.setFont(FONT_BODY);
         field.setBorder(new CompoundBorder(
-                new LineBorder(BORDER_LIGHT, 1, true),
+                new LineBorder(getBorderColor(), 1, true),
                 new EmptyBorder(4, 8, 4, 8)
         ));
-        field.setBackground(Color.WHITE);
-        field.setForeground(TEXT_PRIMARY);
+        Color bg = UIManager.getColor("TextField.background");
+        Color fg = UIManager.getColor("TextField.foreground");
+        if (bg == null) bg = isDarkMode() ? new Color(22, 27, 34) : Color.WHITE;
+        if (fg == null) fg = getTextPrimary();
+        field.setBackground(bg);
+        field.setForeground(fg);
+        field.setCaretColor(fg);
     }
 
     /**
@@ -95,7 +269,11 @@ public final class UITheme {
      */
     public static void styleComboBox(JComboBox<?> combo) {
         combo.setFont(FONT_BODY);
-        combo.setBackground(Color.WHITE);
-        combo.setForeground(TEXT_PRIMARY);
+        Color bg = UIManager.getColor("ComboBox.background");
+        Color fg = UIManager.getColor("ComboBox.foreground");
+        if (bg == null) bg = isDarkMode() ? new Color(30, 36, 46) : Color.WHITE;
+        if (fg == null) fg = getTextPrimary();
+        combo.setBackground(bg);
+        combo.setForeground(fg);
     }
 }

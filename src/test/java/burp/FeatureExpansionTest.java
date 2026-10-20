@@ -227,6 +227,156 @@ public class FeatureExpansionTest {
         assertFalse("Session should be marked inactive", session.isActive());
     }
 
+    @Test
+    public void testTerminalSanitizationOscAndCsi() {
+        // 1. Kali Linux OSC window title sequence: \033]0;root@DESKTOP-6ALMHTS: ~\007
+        String rawKaliOsc = "\u001B]0;root@DESKTOP-6ALMHTS: ~\u0007┌──(root㉿DESKTOP-6ALMHTS)-[~]\n└─# ";
+        String cleanedKali = ShellSession.sanitizeTerminalOutput(rawKaliOsc);
+        assertFalse("OSC window title must be completely stripped", cleanedKali.contains("]0;root@DESKTOP-6ALMHTS"));
+        assertTrue("Prompt line 1 must be preserved", cleanedKali.contains("┌──(root㉿DESKTOP-6ALMHTS)-[~]"));
+        assertTrue("Prompt line 2 must be preserved", cleanedKali.contains("└─# "));
+
+        // 2. OSC terminated with String Terminator (ST): \033\
+        String rawOscSt = "\u001B]2;My Terminal Title\u001B\\Prompt> ";
+        String cleanedOscSt = ShellSession.sanitizeTerminalOutput(rawOscSt);
+        assertFalse("OSC with ST terminator must be completely stripped", cleanedOscSt.contains("My Terminal Title"));
+        assertEquals("Prompt> ", cleanedOscSt);
+
+        // 3. CSI Color codes (SGR) and cursor movements
+        String rawCsi = "\u001B[1;32muser@host\u001B[0m:\u001B[1;34m/var/www\u001B[0m$ \u001B[2K";
+        String cleanedCsi = ShellSession.sanitizeTerminalOutput(rawCsi);
+        assertEquals("user@host:/var/www$ ", cleanedCsi);
+
+        // 4. Bracketed paste mode codes (\033[?2004h / \033[?2004l)
+        String rawBracketed = "\u001B[?2004hcommand\u001B[?2004l";
+        String cleanedBracketed = ShellSession.sanitizeTerminalOutput(rawBracketed);
+        assertEquals("command", cleanedBracketed);
+    }
+
+    @Test
+    public void testTerminalWhitespaceAndCrlfNormalization() {
+        // 1. CRLF and excess CR
+        String rawCrlf = "line1\r\nline2\r\r\nline3\n";
+        String cleanedCrlf = ShellSession.sanitizeTerminalOutput(rawCrlf);
+        assertEquals("line1\nline2\nline3\n", cleanedCrlf);
+
+        // 2. Isolated CR (cursor return to start of line) must NOT become extra newline
+        String rawCr = "\r└─# ";
+        String cleanedCr = ShellSession.sanitizeTerminalOutput(rawCr);
+        assertEquals("└─# ", cleanedCr);
+
+        // 3. Excessive vertical blank lines (>2 newlines) collapsed to \n\n
+        String rawNewlines = "block1\n\n\n\n\nblock2";
+        String cleanedNewlines = ShellSession.sanitizeTerminalOutput(rawNewlines);
+        assertEquals("block1\n\nblock2", cleanedNewlines);
+
+        // 4. Meaningful indentation (spaces/tabs) preserved
+        String rawIndented = "  total 24\n\tdrwxr-xr-x 2 root root\n";
+        String cleanedIndented = ShellSession.sanitizeTerminalOutput(rawIndented);
+        assertEquals("  total 24\n\tdrwxr-xr-x 2 root root\n", cleanedIndented);
+    }
+
+    @Test
+    public void testCommandEchoAndStrayPromptSuppression() throws Exception {
+        MockSocket socket = new MockSocket();
+        ShellSession session = new ShellSession(99, socket, null);
+
+        // Simulate user sending command "id"
+        session.sendCommand("id", Executors.newSingleThreadExecutor());
+
+        // Incoming raw chunk contains: echoed command "id", stray readline prompt "└─#", and actual output "uid=0..."
+        String rawChunk = "id\r\n└─# \r\nuid=0(root) gid=0(root) groups=0(root)\n";
+        String processed = session.processIncomingChunk(rawChunk);
+
+        assertFalse("Command echo 'id' must be suppressed", processed.contains("id\n"));
+        assertFalse("Stray prompt '└─#' before output must be suppressed", processed.contains("└─#"));
+        assertTrue("Command output must be preserved", processed.contains("uid=0(root) gid=0(root) groups=0(root)"));
+
+        // Next chunk contains the post-execution prompt with Kali OSC window title -> must be completely suppressed
+        String postPrompt = "\u001B]0;root@DESKTOP-6ALMHTS: ~\u0007┌──(root㉿DESKTOP-6ALMHTS)-[~]\n└─# ";
+        String processedPrompt = session.processIncomingChunk(postPrompt);
+        assertEquals("Post-execution remote prompt must be completely suppressed", "", processedPrompt);
+
+        // Redundant duplicate prompt packet arrived right after
+        String duplicatePacket = "\r\n└─# \r\n";
+        String processedDuplicate = session.processIncomingChunk(duplicatePacket);
+        assertEquals("Subsequent redundant prompt packet must be completely suppressed", "", processedDuplicate);
+    }
+
+    @Test
+    public void testFragmentedTcpEchoAndStrayPromptSuppression() throws Exception {
+        MockSocket socket = new MockSocket();
+        ShellSession session = new ShellSession(101, socket, null);
+
+        // Simulate user sending command "id"
+        session.sendCommand("id", Executors.newSingleThreadExecutor());
+
+        // Fragmented Packet 1: Command echo only
+        String pkt1 = "id\r\n";
+        String res1 = session.processIncomingChunk(pkt1);
+        assertEquals("Command echo alone must be suppressed", "", res1);
+
+        // Fragmented Packet 2: Stray readline pre-execution redraw prompt ("└─# ")
+        String pkt2 = "└─# \r\n";
+        String res2 = session.processIncomingChunk(pkt2);
+        assertEquals("Stray pre-execution prompt across packet boundary must be suppressed", "", res2);
+
+        // Fragmented Packet 3: Actual command output
+        String pkt3 = "uid=0(root) gid=0(root) groups=0(root)\r\n";
+        String res3 = session.processIncomingChunk(pkt3);
+        assertTrue("Command output must be preserved", res3.contains("uid=0(root) gid=0(root) groups=0(root)"));
+        assertFalse("Output chunk must not contain stray prompt", res3.contains("└─#"));
+
+        // Fragmented Packet 4: Post-execution prompt -> must be completely suppressed
+        String pkt4 = "┌──(root㉿DESKTOP-6ALMHTS)-[~]\n└─# ";
+        String res4 = session.processIncomingChunk(pkt4);
+        assertEquals("Post-execution prompt must be completely suppressed", "", res4);
+    }
+
+    @Test
+    public void testCrossChunkPromptDeduplication() throws Exception {
+        MockSocket socket = new MockSocket();
+        ShellSession session = new ShellSession(100, socket, null);
+
+        // Packet 1: Initial Kali prompt arrives before any command has been typed
+        String pkt1 = "]0;root@DESKTOP-6ALMHTS: ~┌──(root㉿DESKTOP-6ALMHTS)-[~]\n└─# ";
+        String res1 = session.processIncomingChunk(pkt1);
+        assertEquals("Initial shell prompt before user executes a command must be suppressed", "", res1);
+
+        // User dispatches a command
+        session.getCommandHistory().add("id");
+
+        // Packet 2: Post-execution prompt with Kali OSC window title -> must be completely suppressed
+        String pkt2 = "]0;root@DESKTOP-6ALMHTS: ~┌──(root㉿DESKTOP-6ALMHTS)-[~]\n└─# ";
+        String res2 = session.processIncomingChunk(pkt2);
+        assertEquals("Post-execution prompt must be completely suppressed", "", res2);
+
+        // Packet 3: Readline re-emits redundant "└─# "
+        String pkt3 = "\n└─# \n";
+        String res3 = session.processIncomingChunk(pkt3);
+        assertEquals("Redundant single-line prompt must be suppressed", "", res3);
+
+        // Packet 4: Readline re-emits entire redundant prompt block
+        String pkt4 = "]0;root@DESKTOP-6ALMHTS: ~┌──(root㉿DESKTOP-6ALMHTS)-[~]\n└─# ";
+        String res4 = session.processIncomingChunk(pkt4);
+        assertEquals("Redundant prompt block must be suppressed", "", res4);
+    }
+
+    @Test
+    public void testCombinedOutputAndTrailingPromptStripping() throws Exception {
+        MockSocket socket = new MockSocket();
+        ShellSession session = new ShellSession(102, socket, null);
+
+        // Simulate user sending command "whoami"
+        session.sendCommand("whoami", Executors.newSingleThreadExecutor());
+
+        // Single chunk containing echo, output, and trailing Kali prompt
+        String combinedChunk = "whoami\r\nroot\r\n\r\n┌──(root㉿DESKTOP-6ALMHTS)-[~]\n└─# ";
+        String processed = session.processIncomingChunk(combinedChunk);
+
+        assertEquals("Only clean command output must remain, trailing prompt must be stripped", "root\n", processed);
+    }
+
     // --- Mock Helpers ---
 
     private static IBurpExtenderCallbacks createMockCallbacks(Map<String, String> settingsStore, StringBuilder errorLog) {
