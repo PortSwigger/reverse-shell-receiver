@@ -1,0 +1,23 @@
+<p>Reverse Shell Receiver provides penetration testers and red team operators with an all-in-one suite combining an HTTP/HTTPS webhook listener for out-of-band application security testing (OAST), a multi-session interactive reverse shell manager, an extensive multi-platform payload generator (40+ templates), and a mock endpoint/SSRF redirector router. It streamlines payload delivery, callback verification, and interactive shell handling directly inside Burp Suite.</p>
+
+<h2>Key Features</h2>
+<ul>
+  <li>HTTP/HTTPS webhook listener that starts a TCP or TLS/SSL socket server to capture out-of-band HTTP/HTTPS callbacks, with live search/filter, full request/response side-by-side inspection, and context menu actions such as sending to Repeater or Intruder.</li>
+  <li>Mock routes and SSRF redirector with configurable route-based responses (for example <code class=InlineCode>/redirect</code> returning a 302 to cloud metadata, <code class=InlineCode>/aws-meta</code>, or <code class=InlineCode>/payload</code>) and dynamic query parameter overrides such as <code class=InlineCode>?status=302&amp;location=...</code> or <code class=InlineCode>?status=401</code>.</li>
+  <li>Interactive telemetry dashboard rendered as a responsive HTML5 page showing client IP, method, path, port, timestamp, payload size, and captured headers, plus an interactive data exfiltration dropzone at <code class=InlineCode>/exfil</code>.</li>
+  <li>Multi-session reverse shell terminal that concurrently manages multiple active shells without dropping connections, with live remote working directory tracking, command history, and quick-assist shortcuts for PTY spawning, TTY upgrades, and AMSI bypass.</li>
+  <li>Native TLS/SSL encrypted sockets using an embedded 2048-bit RSA PKCS#12 certificate, enabling encrypted reverse shell listeners compatible with PowerShell TLS, Ncat SSL, and Socat OpenSSL.</li>
+  <li>File transfer and session log export, including automated Base64 chunked file upload to remote targets (for example <code class=InlineCode>/tmp/</code> or <code class=InlineCode>C:\Users\Public\</code>) and one-click Markdown session log export for reporting.</li>
+  <li>Extensive payload generator covering 40+ templates across five categories (reverse shells, bind shells, web shells, data exfiltration, and stagers) for Linux, Windows, macOS, and web targets, with 10 encoding schemes.</li>
+  <li>Auto-host stager on webhook, publishing active payload scripts to paths such as <code class=InlineCode>/payload</code>, <code class=InlineCode>/rev.ps1</code>, or <code class=InlineCode>/shell.sh</code> for use as download cradles with tools like <code class=InlineCode>IEX</code> or <code class=InlineCode>curl | sh</code>.</li>
+  <li>Smart address chips and port manager: interactive chips that copy the full listening <code class=InlineCode>https://</code> URL to the clipboard, plus a built-in process killer for occupied ports.</li>
+</ul>
+
+<h2>Usage</h2>
+<ol>
+  <li>Open the Reverse Shell Receiver tab, select HTTP Webhook or Reverse Shell, specify the port, optionally enable TLS/SSL Socket, and click Start. Click any address chip to copy the listening URL to your clipboard.</li>
+  <li>To capture webhooks and OAST interactions, direct target callbacks to the listening address. Inbound interactions appear in the table; click a row to inspect the request and response side-by-side or send it to Repeater. Use Mock Routes &amp; SSRF to configure custom redirectors.</li>
+  <li>To manage reverse shells, switch between sessions in the Active Sessions table as target shells connect. Send commands through the prompt, use the Quick Action dropdown for PTY/TTY upgrades or AMSI bypass, click Upload File to Shell to transfer files, and Export Session Log for reporting.</li>
+  <li>To generate and host a payload, open the Payload Generator tab, search and select a template, click Auto-Fill from Listener, choose an encoding format, and click Generate Payload. Click Host as Stager on Webhook to make the script downloadable immediately via <code class=InlineCode>http://&lt;ip&gt;:&lt;port&gt;/payload</code>.</li>
+  <li>To resolve port conflicts, click Kill Ports to inspect occupying processes and terminate them cleanly from the dialog.</li>
+</ol>
